@@ -21,12 +21,7 @@ Hold Right-Ctrl →  speak  →  release  →  text appears where your cursor is
 
 ## Demo
 
-<!-- Record a ~20s clip (hold Right Ctrl, talk, watch the text land), save it as
-     docs/demo.gif, then uncomment the next line. Capture guide: docs/README.md -->
-<!-- ![Typefree in action](docs/demo.gif) -->
-
-> 📹 A short screen recording goes here — see [`docs/README.md`](docs/README.md)
-> for a two-command way to capture one on Wayland.
+![Typefree in action](docs/demo.gif)
 
 ---
 
