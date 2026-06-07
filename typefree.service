@@ -1,0 +1,19 @@
+[Unit]
+Description=Typefree - Speech-to-Text global hotkey daemon
+After=graphical-session.target ydotoold.service
+Wants=ydotoold.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.local/share/typefree/typefree.py
+Restart=on-failure
+RestartSec=3
+Environment=TYPEFREE_HOTKEY=z
+Environment=TYPEFREE_MODIFIER=alt
+Environment=TYPEFREE_MODE=hold
+Environment=YDOTOOL_SOCKET=%t/.ydotool_socket
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

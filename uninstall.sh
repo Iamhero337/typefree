@@ -1,26 +1,22 @@
 #!/bin/bash
-
 set -e
-
-echo "🗑️  Uninstalling Speech-to-Text Hotkey..."
+echo "🗑️  Uninstalling Typefree..."
 echo ""
 
-# Stop and disable the service
-echo "Stopping daemon..."
-systemctl --user stop speech2text.service || true
-systemctl --user disable speech2text.service || true
-
-# Remove service file
-echo "Removing service..."
-rm -f ~/.config/systemd/user/speech2text.service
+for svc in typefree ydotoold; do
+    systemctl --user stop $svc.service 2>/dev/null || true
+    systemctl --user disable $svc.service 2>/dev/null || true
+    rm -f ~/.config/systemd/user/$svc.service
+done
 systemctl --user daemon-reload
 
-# Remove daemon files
-echo "Removing application files..."
-rm -rf ~/.local/share/speech-to-text-hotkey
+rm -rf ~/.local/share/typefree
 
 echo ""
-echo "✅ Uninstall complete!"
+echo "✅ Uninstalled."
 echo ""
-echo "To also remove Python packages, run:"
-echo "   pip3 uninstall -y openai-whisper pynput sounddevice scipy numpy"
+echo "Kept (remove manually if you want):"
+echo "  • config:        ~/.config/typefree"
+echo "  • udev rule:     sudo rm /etc/udev/rules.d/99-typefree-uinput.rules"
+echo "  • 'input' group: sudo gpasswd -d $USER input"
+echo "  • python deps:   pip3 uninstall --break-system-packages -y openai-whisper evdev sounddevice"

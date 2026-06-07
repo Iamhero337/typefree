@@ -1,186 +1,154 @@
 # 🎤 Typefree
 
-**Type with your voice.** Instantly convert speech to text using a global hotkey on Linux. Works everywhere—in your browser, terminal, text editor, or any app where you can type.
+**Type with your voice, anywhere on Linux.** Hold a hotkey, speak, release — your
+words are transcribed by [OpenAI Whisper](https://github.com/openai/whisper)
+(fully offline) and typed straight at your cursor, in any app: browser,
+terminal, editor, chat.
 
-**Press and hold `Alt+Z` → Release → Text appears** ✨
+It's the Linux answer to Windows' `Win+H` — and it works on **Wayland** (KDE,
+GNOME, …) *and* X11.
 
-## Features
+```
+Hold  Alt+Z  →  speak  →  release  →  text appears where your cursor is
+```
 
-- 🌍 **Works Everywhere** - Use in any app, browser, terminal, or text editor
-- 🎙️ **Hold-to-Record** - Press Alt+Z to start, release to stop and transcribe
-- 📋 **Dual Output** - Copies to clipboard AND outputs to stdout
-- 🚀 **Always Running** - Daemon starts automatically on boot
-- 🔒 **Offline** - Uses local Whisper model (no cloud required)
-- 🎯 **Accurate** - Powered by OpenAI's Whisper
-- ⚙️ **Customizable** - Change hotkey anytime
+---
+
+## Why this exists
+
+Wayland deliberately blocks apps from grabbing global hotkeys or injecting
+keystrokes (the tricks `pynput`/`xdotool` rely on). Typefree works *with* the
+kernel instead:
+
+| Need              | How Typefree does it                                  |
+|-------------------|-------------------------------------------------------|
+| Global hotkey     | reads `/dev/input` directly via **evdev** (X11+Wayland)|
+| Type at cursor    | **ydotool** + **ydotoold** inject via `/dev/uinput`    |
+| Clipboard         | **wl-copy** (Wayland) / **xclip** (X11)               |
+| Speech → text     | **OpenAI Whisper**, offline, on your machine          |
+
+> ⚠️ Ubuntu ships `ydotool` 0.1.8, which has **no daemon** and drops the first
+> few characters it types. The installer builds **ydotool 1.x** from source so
+> typing is reliable (verified: full string round-trips, zero drops).
+
+---
 
 ## Requirements
 
-- Linux (Ubuntu/Debian/Fedora/etc.)
-- Python 3.7+
-- Microphone
-- ~1.4 GB disk space (for Whisper model on first run)
+- Linux with Wayland or X11 (tested on KDE Plasma / Wayland)
+- Python 3.9+
+- A microphone
+- ~150 MB for the Whisper `base` model (downloaded on first run)
+- `sudo` once, for installing packages + a udev rule
 
-## Quick Start
+## Install
 
 ```bash
-# 1. Clone or download this repo
 cd typefree
-
-# 2. Install (one command)
 bash install.sh
-
-# 3. Done! Press Alt+Z to use
 ```
 
-That's it! The daemon starts automatically and runs in the background.
+The installer:
+1. installs system deps (portaudio, ffmpeg, wl-clipboard, build tools)
+2. builds & installs **ydotool 1.x + ydotoold**
+3. `pip install`s the Python deps
+4. adds you to the **`input`** group and installs a udev rule for `/dev/uinput`
+5. installs + enables two user services: `ydotoold` and `typefree`
+
+### ⚠️ One-time step: log out and back in
+
+Reading the keyboard needs your login session to be in the **`input`** group.
+Group membership only updates on a fresh login, so:
+
+```bash
+# after install: log out and back in (or reboot), then:
+systemctl --user start typefree.service
+bash status.sh
+```
+
+After that it auto-starts on every boot.
 
 ## Usage
 
-### Recording
+1. **Hold `Alt+Z`**
+2. **Speak**
+3. **Release**
 
-1. **Press and hold** `Alt+Z`
-2. **Speak into your microphone**
-3. **Release Alt+Z**
-4. Your speech converts to text and:
-   - ✅ Copies to clipboard (paste with `Ctrl+V`)
-   - ✅ Prints to stdout (appears where cursor is)
+Your speech is transcribed, **typed at the cursor**, and **copied to the
+clipboard** (so you can paste with `Ctrl+V` too).
 
-### Example Use Cases
+## Configuration
 
-**In a browser:**
+Edit `~/.config/typefree/config.json`:
+
+```json
+{
+  "hotkey": "z",          // any letter, "space", or "f1".."f12"
+  "modifier": "alt",      // alt | ctrl | shift | super | none
+  "mode": "hold",         // hold = hold-to-talk | toggle = press on/off
+  "model": "base",        // tiny | base | small | medium | large
+  "language": "en",       // language code, or "auto" to detect
+  "type_out": true,       // type at the cursor
+  "clipboard": true,      // also copy to clipboard
+  "sample_rate": 16000
+}
 ```
-[Write an email]
-Press Alt+Z → "Hello, this is my message" → Release → Text pasted ✨
-```
 
-**In terminal:**
+Apply changes:
+
 ```bash
-$ git commit -m "
-Press Alt+Z → "Fix login bug in auth module" → Release → Text pasted
+systemctl --user restart typefree.service
 ```
 
-**In any text editor:**
-- Notes, documents, code comments - just press Alt+Z!
+**Tips**
+- Want push-to-toggle instead of push-to-talk? Set `"mode": "toggle"` (press
+  once to start, again to stop).
+- More accuracy? Use `"model": "small"` or `"medium"` (slower, larger download).
+- The env vars `TYPEFREE_HOTKEY`, `TYPEFREE_MODIFIER`, `TYPEFREE_MODE`,
+  `TYPEFREE_MODEL`, `TYPEFREE_LANGUAGE` override the config (set in the
+  service unit).
 
 ## Commands
 
 ```bash
-# Check if daemon is running
-bash status.sh
+bash status.sh      # are the services up? is the input group active?
+bash logs.sh        # live logs
+bash uninstall.sh   # remove everything
 
-# View live logs
-bash logs.sh
-
-# Restart daemon (if needed)
-systemctl --user restart speech2text.service
-
-# Stop daemon temporarily
-systemctl --user stop speech2text.service
-
-# Start daemon
-systemctl --user start speech2text.service
-
-# Completely uninstall
-bash uninstall.sh
+systemctl --user restart typefree.service
+systemctl --user stop typefree.service
 ```
 
-## Customization
+## How it works
 
-### Change Hotkey
-
-The default is `Alt+Z`. To change it:
-
-```bash
-# Edit the service file
-nano ~/.config/systemd/user/speech2text.service
-
-# Change this line to use a different key (e.g., 'x' for Alt+X):
-# Environment="STT_HOTKEY=z"
-# to:
-# Environment="STT_HOTKEY=x"
-
-# Reload and restart
-systemctl --user daemon-reload
-systemctl --user restart speech2text.service
 ```
-
-### Use Different Language
-
-Edit `speech2text.py` and change:
-```python
-result = self.model.transcribe(tmp_path, language="en")
+  ┌────────────┐   Alt+Z    ┌───────────┐  audio   ┌──────────┐
+  │  keyboard  │──────────▶ │ typefree  │ ───────▶ │ Whisper  │
+  │ /dev/input │   evdev    │  daemon   │          │ (offline)│
+  └────────────┘            └─────┬─────┘          └────┬─────┘
+                                  │ text                 │ text
+                    ┌─────────────┴───────────┐          │
+                    ▼                          ▼          │
+              ydotool → /dev/uinput       wl-copy ◀───────┘
+              (types at cursor)          (clipboard)
 ```
-
-Replace `"en"` with your language code:
-- `"es"` for Spanish
-- `"fr"` for French
-- `"de"` for German
-- `"zh"` for Chinese
-- etc.
 
 ## Troubleshooting
 
-### Daemon not running?
-```bash
-# Check status
-bash status.sh
+**Nothing happens on Alt+Z**
+- `bash status.sh` — is `typefree` running and the `input` group active?
+- If the group isn't active, log out/in.
 
-# View errors
-bash logs.sh
-```
+**Text is copied but not typed at the cursor**
+- Check `ydotoold` is running: `systemctl --user status ydotoold.service`
+- Confirm `/dev/uinput` is `crw-rw---- root input`: `ls -l /dev/uinput`
 
-### No audio input detected?
-```bash
-# List audio devices
-arecord -l
+**No speech detected / poor accuracy**
+- Check the mic: `arecord -l`, and your default source in `pavucontrol`.
+- Try a bigger model (`small`/`medium`) in the config.
 
-# If no microphone shows, check with:
-pactl list sources
-```
-
-### Permission denied on install.sh?
-```bash
-chmod +x install.sh
-bash install.sh
-```
-
-### Microphone not working in browser?
-Some browsers require extra permissions:
-- Firefox/Chrome: Check site permissions for microphone
-- Your app must be allowed to access audio
-
-### Text not appearing?
-
-1. **Check if xclip is installed:**
-   ```bash
-   which xclip
-   ```
-   If not: `sudo apt-get install xclip`
-
-2. **View logs for errors:**
-   ```bash
-   bash logs.sh
-   ```
-
-3. **Try a longer recording** - Whisper needs a bit of audio to work
-
-## How It Works
-
-1. **Global Hotkey Listener** - Watches for Alt+Z across the system
-2. **Audio Recording** - Captures microphone input when key is held
-3. **Whisper Transcription** - Converts audio to text (offline, on your machine)
-4. **Dual Output**:
-   - Copies result to clipboard using `xclip`
-   - Prints to stdout (inserts where your cursor is)
-
-## What's Installed
-
-- **speech2text.py** - Main daemon (runs in background)
-- **Python packages** - whisper, pynput, sounddevice, scipy, numpy
-- **Systemd service** - Auto-starts on boot as a user service
-
-All files stay in `~/.local/share/speech-to-text-hotkey` and `~/.config/systemd/user`
+**Wrong keyboard layout in typed text**
+- ydotool types by keycode; exotic layouts may differ. File an issue.
 
 ## Uninstall
 
@@ -188,37 +156,8 @@ All files stay in `~/.local/share/speech-to-text-hotkey` and `~/.config/systemd/
 bash uninstall.sh
 ```
 
-This removes the daemon and service. To also remove Python packages:
-```bash
-pip3 uninstall -y openai-whisper pynput sounddevice scipy numpy
-```
-
-## Performance
-
-- **First transcription**: ~5-10 seconds (Whisper model loads)
-- **Subsequent transcriptions**: ~2-5 seconds (model cached)
-- **Disk space**: ~1.4 GB for base Whisper model
-
-Use `bash status.sh` to confirm it's running smoothly.
-
-## Improvements & Feedback
-
-Want to add features? Here are some ideas:
-
-- [ ] GUI settings panel
-- [ ] Multiple hotkey support
-- [ ] Auto-correct misspellings
-- [ ] Language auto-detection
-- [ ] Custom wake words
-- [ ] Integration with grammar checkers
-- [ ] Support for different Whisper models (tiny, small, medium, large)
-
-Found a bug? Create an issue or submit a PR!
+It also prints the manual cleanup commands (udev rule, `input` group, pip pkgs).
 
 ## License
 
-Free to use and modify. Enjoy! 🎉
-
----
-
-**Need help?** Run `bash status.sh` and `bash logs.sh` to debug issues.
+MIT — see [LICENSE](LICENSE).

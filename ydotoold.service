@@ -1,0 +1,12 @@
+[Unit]
+Description=ydotoold - virtual input device daemon for Typefree
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ydotoold --socket-path=%t/.ydotool_socket --socket-perm=0660 --socket-own=%U:%G
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

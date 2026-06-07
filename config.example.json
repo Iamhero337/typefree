@@ -1,0 +1,10 @@
+{
+  "hotkey": "z",
+  "modifier": "alt",
+  "mode": "hold",
+  "model": "base",
+  "language": "en",
+  "type_out": true,
+  "clipboard": true,
+  "sample_rate": 16000
+}
