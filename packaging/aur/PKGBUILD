@@ -1,0 +1,60 @@
+# Maintainer: Hero <iamhero337@gmail.com>
+pkgname=typefree
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Talk-to-type for Linux (Wayland+X11): hold a key, speak, text appears at your cursor. 100% offline Whisper."
+arch=('any')
+url="https://github.com/Iamhero337/typefree"
+license=('MIT')
+depends=(
+  'python'
+  'ydotool'                 # Arch ships 1.x incl. ydotoold (unlike Debian's 0.1.8)
+  'python-evdev'
+  'python-numpy'
+  'python-scipy'
+  'python-sounddevice'
+  'python-pyqt5'
+  'python-pytorch'
+  'python-openai-whisper'   # in the AUR; an AUR helper (yay/paru) pulls it in
+  'ffmpeg'
+  'wl-clipboard'
+  'libnotify'
+)
+optdepends=('xclip: clipboard support on X11 sessions')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')   # run `updpkgsums` after the v1.0.0 tag exists to pin this
+install="$pkgname.install"
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+
+  # ---- application ----
+  install -Dm755 typefree.py          "$pkgdir/usr/lib/typefree/typefree.py"
+  install -Dm755 typefree-launch.sh   "$pkgdir/usr/lib/typefree/typefree-launch.sh"
+  install -d "$pkgdir/usr/bin"
+  ln -s /usr/lib/typefree/typefree-launch.sh "$pkgdir/usr/bin/typefree"
+
+  # ---- udev rule (/dev/uinput -> group input, 0660) ----
+  install -Dm644 99-typefree-uinput.rules \
+    "$pkgdir/usr/lib/udev/rules.d/99-typefree-uinput.rules"
+
+  # ---- systemd *user* units, rewritten for system install paths ----
+  sed 's#%h/.local/share/typefree/typefree.py#/usr/lib/typefree/typefree.py#' \
+    typefree.service > "$srcdir/typefree.service.pkg"
+  sed 's#/usr/local/bin/ydotoold#/usr/bin/ydotoold#' \
+    ydotoold.service > "$srcdir/ydotoold.service.pkg"
+  install -Dm644 "$srcdir/typefree.service.pkg" "$pkgdir/usr/lib/systemd/user/typefree.service"
+  install -Dm644 "$srcdir/ydotoold.service.pkg" "$pkgdir/usr/lib/systemd/user/ydotoold.service"
+
+  # ---- desktop launcher + icon ----
+  sed 's#^Exec=__LAUNCHER__#Exec=/usr/bin/typefree#' typefree.desktop \
+    > "$srcdir/typefree.desktop.pkg"
+  install -Dm644 "$srcdir/typefree.desktop.pkg" \
+    "$pkgdir/usr/share/applications/typefree.desktop"
+  install -Dm644 typefree.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/typefree.svg"
+
+  # ---- license + docs ----
+  install -Dm644 LICENSE   "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

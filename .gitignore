@@ -33,3 +33,6 @@ env/
 
 # Whisper model cache (will be in ~/.cache)
 .cache/
+
+# Built package artifacts (attach to GitHub releases instead of committing)
+*.deb

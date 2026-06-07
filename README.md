@@ -1,5 +1,12 @@
 # 🎤 Typefree
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+![Platform: Linux](https://img.shields.io/badge/platform-Linux-blue)
+![Display: Wayland | X11](https://img.shields.io/badge/display-Wayland%20%7C%20X11-blueviolet)
+![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-yellow)
+![Offline](https://img.shields.io/badge/Whisper-100%25%20offline-orange)
+[![Stars](https://img.shields.io/github/stars/Iamhero337/typefree?style=social)](https://github.com/Iamhero337/typefree/stargazers)
+
 **Type with your voice, anywhere on Linux.** Hold a hotkey, speak, release — your
 words are transcribed by [OpenAI Whisper](https://github.com/openai/whisper)
 (fully offline) and typed straight at your cursor, in any app: browser,
@@ -11,6 +18,15 @@ GNOME, …) *and* X11.
 ```
 Hold Right-Ctrl →  speak  →  release  →  text appears where your cursor is
 ```
+
+## Demo
+
+<!-- Record a ~20s clip (hold Right Ctrl, talk, watch the text land), save it as
+     docs/demo.gif, then uncomment the next line. Capture guide: docs/README.md -->
+<!-- ![Typefree in action](docs/demo.gif) -->
+
+> 📹 A short screen recording goes here — see [`docs/README.md`](docs/README.md)
+> for a two-command way to capture one on Wayland.
 
 ---
 
@@ -44,6 +60,7 @@ kernel instead:
 ## Install
 
 ```bash
+git clone https://github.com/Iamhero337/typefree.git
 cd typefree
 bash install.sh
 ```
