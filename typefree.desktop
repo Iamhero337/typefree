@@ -1,0 +1,20 @@
+[Desktop Entry]
+Type=Application
+Name=Typefree
+GenericName=Speech-to-Text
+Comment=Start talk-to-type — hold Alt+Z, speak, text appears at your cursor
+Icon=typefree
+Exec=systemctl --user start typefree.service
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=speech;voice;dictation;transcribe;microphone;whisper;
+StartupNotify=false
+Actions=Restart;Stop;
+
+[Desktop Action Restart]
+Name=Restart Typefree
+Exec=systemctl --user restart typefree.service
+
+[Desktop Action Stop]
+Name=Stop Typefree
+Exec=systemctl --user stop typefree.service

@@ -11,6 +11,9 @@ done
 systemctl --user daemon-reload
 
 rm -rf ~/.local/share/typefree
+rm -f ~/.local/share/applications/typefree.desktop
+rm -f ~/.local/share/icons/hicolor/scalable/apps/typefree.svg
+update-desktop-database ~/.local/share/applications 2>/dev/null || true
 
 echo ""
 echo "✅ Uninstalled."

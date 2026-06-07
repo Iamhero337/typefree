@@ -160,6 +160,19 @@ systemctl --user enable ydotoold.service typefree.service 2>/dev/null || true
 systemctl --user start ydotoold.service 2>/dev/null || true
 
 # ----------------------------------------------------------------------
+# Clickable app launcher (KDE/GNOME menu) so users never need the terminal.
+# Clicking it starts the service; right-click offers Restart/Stop.
+say "🖱️  Installing app launcher + icon..."
+ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
+APP_DIR="$HOME/.local/share/applications"
+mkdir -p "$ICON_DIR" "$APP_DIR"
+cp typefree.svg "$ICON_DIR/typefree.svg"
+cp typefree.desktop "$APP_DIR/typefree.desktop"
+command -v update-desktop-database >/dev/null && update-desktop-database "$APP_DIR" 2>/dev/null || true
+command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -qtf "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+say "   added 'Typefree' to your app menu"
+
+# ----------------------------------------------------------------------
 say ""
 if [ "$NEED_RELOGIN" -eq 1 ]; then
     say "========================================"
