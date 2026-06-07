@@ -54,10 +54,11 @@ DEFAULT_CONFIG = {
     "sample_rate": 16000,
 }
 
-# freedesktop sound cues (played via paplay / pw-play)
+# freedesktop sound cues (played via paplay / pw-play).
+# Only "start" chimes on every use; success is silent (the toast is enough).
+# "empty" is a quiet warning that only fires when a dictation failed.
 SOUNDS = {
     "start": "message-new-instant",
-    "done": "complete",
     "empty": "dialog-warning",
 }
 SOUND_DIR = "/usr/share/sounds/freedesktop/stereo"
@@ -315,7 +316,6 @@ class Typefree:
                 self._type_text(text)
                 preview = text if len(text) <= 80 else text[:77] + "…"
                 self._notify("📝 Typed", preview)
-                self._play("done")
             except Exception as e:
                 log.error("transcription error: %s", e)
                 self._notify("⚠️ Transcription failed", str(e), urgency="critical")

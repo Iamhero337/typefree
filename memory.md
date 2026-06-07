@@ -103,8 +103,10 @@ So we added **two-channel feedback** (both toggleable in config: `notify`, `soun
   · ⏳ Transcribing… (release) · 📝 Typed: <preview> (success) · 🔇 No speech /
   🤚 Too short / ⚠️ failed (problems).
 - **Sound cues** via `paplay` (already present) playing freedesktop `.oga`:
-  `message-new-instant` (start) · `complete` (done) · `dialog-warning` (empty/err).
-  Files live in `/usr/share/sounds/freedesktop/stereo/`.
+  `message-new-instant` (start) · `dialog-warning` (empty/error). Files live in
+  `/usr/share/sounds/freedesktop/stereo/`. **User preference (asked & confirmed):
+  only the START sound — success is SILENT (the 📝 toast is enough). Do not add a
+  "done" chime back.** The warn tone only fires on failure.
 
 Helpers `_notify()` / `_play()` in `typefree.py` are best-effort & non-blocking
 (`subprocess.Popen`, swallow errors) so feedback never breaks dictation.
@@ -174,6 +176,13 @@ immediately, e.g. the verification we used:
 - ✅ DONE: recording-state feedback — toasts + sounds (see §4b). A persistent
   tray icon is still possible but toasts already cover the need.
 - ✅ CONFIRMED: PortAudio reaches Pulse/PipeWire from the `--user` service.
+- ✅ DONE: installer now asks accuracy-vs-RAM and writes the chosen Whisper model
+  into config.json (`choose_model()` in install.sh; honors $TYPEFREE_MODEL, falls
+  back to 'base' when non-interactive). Models & approx *resident* RAM: tiny ~0.6,
+  base ~0.9, small ~1.3, medium ~2.5, large ~4.5 GB — model stays loaded (always-on
+  daemon), runs on CPU not GPU.
+- User's current machine runs the **`small`** model (~1.2 GB measured), chosen
+  2026-06-07 for better laptop accuracy.
 - Possible: a `typefree` CLI to change hotkey/model without editing JSON.
 - Possible: auto-paste fallback (`ydotool key ctrl+v`) for apps where typing is
   slow; note terminals need ctrl+shift+v.

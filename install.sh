@@ -22,6 +22,47 @@ run_sudo() {
     fi
 }
 
+# Ask the user how accurate they want transcription vs. how much RAM/CPU they
+# can spare. The model is loaded once and stays resident the whole time the
+# daemon runs, so this is a *permanent* RAM cost — be upfront about it.
+# Echoes the chosen model name on stdout. Honors $TYPEFREE_MODEL and skips the
+# prompt when non-interactive (no TTY), defaulting to 'base'.
+choose_model() {
+    if [ -n "$TYPEFREE_MODEL" ]; then
+        echo "$TYPEFREE_MODEL"; return
+    fi
+    if [ ! -t 0 ]; then
+        echo "base"; return
+    fi
+    # menu -> stderr so stdout stays clean for the chosen model name
+    {
+        echo ""
+        echo "  Choose transcription quality. Bigger = more accurate, but uses"
+        echo "  more RAM *permanently* (the model stays loaded) and is slower per"
+        echo "  clip. Approx. resident RAM and one-time download:"
+        echo ""
+        echo "    1) tiny    ~0.6 GB RAM   75 MB    fastest, basic accuracy"
+        echo "    2) base    ~0.9 GB RAM  140 MB    fast, decent       (default)"
+        echo "    3) small   ~1.3 GB RAM  460 MB    medium, good"
+        echo "    4) medium  ~2.5 GB RAM  1.5 GB    slow, very good"
+        echo "    5) large   ~4.5 GB RAM  3.0 GB    slowest, best"
+        echo ""
+        free -h 2>/dev/null | awk 'NR==2{print "  Your machine: "$2" total RAM, "$7" available right now."}'
+        echo ""
+    } >&2
+    local choice model
+    read -rp "  Pick 1-5 [2]: " choice >&2
+    case "$choice" in
+        1) model=tiny ;;
+        3) model=small ;;
+        4) model=medium ;;
+        5) model=large ;;
+        *) model=base ;;
+    esac
+    echo "  → using '$model'" >&2
+    echo "$model"
+}
+
 say "========================================"
 say "🎤 Typefree installer (Wayland + X11)"
 say "========================================\n"
@@ -93,7 +134,20 @@ chmod +x "$SHARE_DIR/typefree.py"
 
 if [ ! -f "$CFG_DIR/config.json" ]; then
     cp config.example.json "$CFG_DIR/config.json"
-    say "   wrote default config to $CFG_DIR/config.json"
+    MODEL="$(choose_model)"
+    python3 - "$CFG_DIR/config.json" "$MODEL" <<'PY'
+import json, sys
+path, model = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    cfg = json.load(f)
+cfg["model"] = model
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+PY
+    say "   wrote config (model='$MODEL') to $CFG_DIR/config.json"
+else
+    say "   keeping existing config at $CFG_DIR/config.json"
 fi
 
 # ----------------------------------------------------------------------
