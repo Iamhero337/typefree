@@ -50,6 +50,7 @@ DEFAULT_CONFIG = {
     "clipboard": True,      # also copy to clipboard
     "notify": True,         # show on-screen toast (recording / result)
     "sound": True,          # play a short audio cue (start / done / empty)
+    "tray": True,           # show a system-tray icon (status + menu)
     "sample_rate": 16000,
 }
 
@@ -172,6 +173,8 @@ class Typefree:
         self.mod_down = False
         self.recording = False
         self.busy = False
+        self.paused = False
+        self.tray = None
         self.recorder = Recorder(cfg["sample_rate"])
         self.model = None
         self._have_ydotool = shutil.which("ydotool") is not None
@@ -227,6 +230,11 @@ class Typefree:
         except Exception as e:
             log.debug("sound failed: %s", e)
 
+    def _set_state(self, state):
+        """Update the tray icon (thread-safe). No-op if tray is off."""
+        if self.tray is not None:
+            self.tray.set_state(state)
+
     # ---- output ---------------------------------------------------------
     def _type_text(self, text):
         if not (self.cfg["type_out"] and self._have_ydotool):
@@ -269,6 +277,7 @@ class Typefree:
             self._notify("🎤 Mic error", str(e), urgency="critical")
             self._play("empty")
             return
+        self._set_state("recording")
         self._notify("🎙️ Listening…", "Speak now — release to type")
         self._play("start")
 
@@ -278,6 +287,7 @@ class Typefree:
         self.recording = False
         self.busy = True
         log.info("⏹️  transcribing...")
+        self._set_state("busy")
         self._notify("⏳ Transcribing…", "")
 
         def work():
@@ -312,12 +322,15 @@ class Typefree:
                 self._play("empty")
             finally:
                 self.busy = False
+                self._set_state("paused" if self.paused else "idle")
 
         threading.Thread(target=work, daemon=True).start()
 
     # ---- key handling ---------------------------------------------------
     def _on_key(self, code, value):
         # value: 1=down, 0=up, 2=autorepeat
+        if self.paused:
+            return
         if code in self.mods:
             self.mod_down = value != 0
             return
@@ -359,6 +372,20 @@ class Typefree:
         log.info("=" * 52)
         self._notify("🎤 Typefree ready", f"Hold {combo} to dictate")
 
+        # Optional system-tray icon. Qt must own the main thread, so when the
+        # tray is up the evdev loop runs in a background thread; otherwise the
+        # evdev loop just runs here (original behaviour).
+        if self.cfg.get("tray", True):
+            self.tray = self._make_tray(combo)
+        if self.tray is not None:
+            threading.Thread(
+                target=self._evdev_loop, args=(kbds,), daemon=True
+            ).start()
+            self.tray.run()  # blocks in Qt event loop until Quit
+        else:
+            self._evdev_loop(kbds)
+
+    def _evdev_loop(self, kbds):
         fds = {dev.fd: dev for dev in kbds}
         while True:
             r, _, _ = select.select(fds, [], [])
@@ -372,7 +399,117 @@ class Typefree:
                     fds.pop(fd, None)
             if not fds:
                 log.error("All keyboards disconnected; exiting.")
-                break
+                os._exit(1)
+
+    # ---- system tray ----------------------------------------------------
+    def _make_tray(self, combo):
+        """Build a QSystemTrayIcon. Returns a Tray object, or None if Qt/the
+        tray is unavailable (daemon then runs headless with toasts+sound)."""
+        try:
+            from PyQt5.QtWidgets import (
+                QApplication, QSystemTrayIcon, QMenu, QAction,
+            )
+            from PyQt5.QtGui import (
+                QPixmap, QPainter, QColor, QBrush, QPen, QIcon,
+            )
+            from PyQt5.QtCore import Qt, QObject, pyqtSignal
+        except Exception as e:
+            log.warning("tray disabled (PyQt5 unavailable): %s", e)
+            return None
+
+        daemon = self
+        COLORS = {
+            "idle": "#3b82f6",       # blue  — ready
+            "recording": "#ef4444",  # red   — listening
+            "busy": "#f59e0b",       # amber — transcribing
+            "paused": "#6b7280",     # grey  — paused
+        }
+        TIPS = {
+            "idle": f"Typefree — ready ({combo})",
+            "recording": "Typefree — 🎙️ listening…",
+            "busy": "Typefree — ⏳ transcribing…",
+            "paused": "Typefree — ⏸️ paused",
+        }
+
+        def make_icon(state):
+            color = COLORS.get(state, COLORS["idle"])
+            pm = QPixmap(64, 64)
+            pm.fill(Qt.transparent)
+            p = QPainter(pm)
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(QColor(color)))
+            p.drawEllipse(4, 4, 56, 56)
+            # white mic glyph
+            p.setBrush(QBrush(QColor("white")))
+            p.drawRoundedRect(26, 16, 12, 21, 6, 6)   # capsule
+            pen = QPen(QColor("white"))
+            pen.setWidth(3)
+            pen.setCapStyle(Qt.RoundCap)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawArc(23, 24, 18, 18, 180 * 16, 180 * 16)  # cradle
+            p.drawLine(32, 42, 32, 48)                      # stem
+            p.drawLine(25, 48, 39, 48)                      # base
+            p.end()
+            return QIcon(pm)
+
+        class Tray(QObject):
+            sig = pyqtSignal(str)  # marshals state changes onto the GUI thread
+
+            def __init__(self):
+                super().__init__()
+                self.app = QApplication.instance() or QApplication(sys.argv)
+                self.app.setQuitOnLastWindowClosed(False)
+                self.icon = QSystemTrayIcon()
+                self.icon.setIcon(make_icon("idle"))
+                self.icon.setToolTip(TIPS["idle"])
+
+                menu = QMenu()
+                header = QAction(f"Typefree — {combo} · {daemon.mode}", menu)
+                header.setEnabled(False)
+                menu.addAction(header)
+                menu.addSeparator()
+                self.pause_act = QAction("Pause dictation", menu, checkable=True)
+                self.pause_act.toggled.connect(self._on_pause)
+                menu.addAction(self.pause_act)
+                menu.addSeparator()
+                quit_act = QAction("Quit Typefree", menu)
+                quit_act.triggered.connect(self._on_quit)
+                menu.addAction(quit_act)
+                self.icon.setContextMenu(menu)
+                self.icon.show()
+                self.sig.connect(self._apply)
+
+            def _apply(self, state):
+                self.icon.setIcon(make_icon(state))
+                self.icon.setToolTip(TIPS.get(state, TIPS["idle"]))
+
+            def set_state(self, state):
+                """Thread-safe: callable from the evdev/worker threads."""
+                self.sig.emit(state)
+
+            def _on_pause(self, checked):
+                daemon.paused = checked
+                self.set_state("paused" if checked else "idle")
+                if checked:
+                    daemon._notify("⏸️ Paused", "Dictation hotkey is off")
+                else:
+                    daemon._notify("▶️ Resumed", f"Hold {combo} to dictate")
+
+            def _on_quit(self):
+                daemon._notify("🛑 Typefree stopped", "")
+                self.icon.hide()
+                os._exit(0)
+
+            def run(self):
+                self.app.exec_()
+
+        try:
+            return Tray()
+        except Exception as e:
+            log.warning("tray init failed (%s); running headless", e)
+            return None
 
 
 if __name__ == "__main__":

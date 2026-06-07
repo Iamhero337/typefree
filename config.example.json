@@ -6,5 +6,8 @@
   "language": "en",
   "type_out": true,
   "clipboard": true,
+  "notify": true,
+  "sound": true,
+  "tray": true,
   "sample_rate": 16000
 }

@@ -113,6 +113,42 @@ Helpers `_notify()` / `_play()` in `typefree.py` are best-effort & non-blocking
 the `systemd --user` unit. **User confirmed: "it works perfectly, I got what I
 wanted."**
 
+## 4c. System-tray icon (added after feedback)
+
+Native **KDE Plasma tray icon** via **PyQt5 `QSystemTrayIcon`** (already installed;
+speaks the StatusNotifierItem/SNI spec that Plasma Wayland uses — no AppIndicator
+needed). Qt inits fine from the `systemd --user` env with `QT_QPA_PLATFORM`
+defaulting to wayland; `QSystemTrayIcon.isSystemTrayAvailable()` → True.
+
+Design (in `typefree.py`, method `_make_tray`):
+- Qt **must own the main thread**, so when the tray is on, the evdev select loop
+  moves to a background thread (`_evdev_loop`) and `app.exec_()` blocks in main.
+  Tray off → evdev loop runs in main thread as before (graceful fallback if PyQt
+  missing / headless; logs a warning, keeps toasts+sound).
+- Icon is drawn at runtime with QPainter (a white mic glyph on a colored disc) —
+  no icon files. Colors encode state: blue=ready, red=listening, amber=
+  transcribing, grey=paused. Tooltip mirrors the state.
+- Cross-thread updates are marshaled via a `pyqtSignal(str)` (`set_state()` is
+  safe to call from the evdev/worker threads; the slot runs on the GUI thread).
+- Right-click menu: header (hotkey·mode), **Pause dictation** (checkable → sets
+  `daemon.paused`, which short-circuits `_on_key`), **Quit Typefree** (`os._exit(0)`;
+  service is `Restart=on-failure` so a clean exit stays down).
+- Config flag `tray` (default true). `python3-pyqt5` added to install.sh deps.
+- Verified: SNI item registered with `org.kde.StatusNotifierWatcher`, and the
+  owning DBus connection PID == the typefree MainPID.
+
+## 4d. GOTCHA: installed copy vs repo (BIT US ONCE — now fixed)
+
+`typefree.service` ExecStart runs **`%h/.local/share/typefree/typefree.py`**, the
+**installed** copy — NOT the repo. install.sh does `cp typefree.py "$SHARE_DIR/"`.
+So editing the repo + `systemctl --user restart` ran **stale code**: the first
+round of toast/sound edits never actually executed in the daemon (only the manual
+`notify-send`/`paplay` test commands did). **Fix applied on this machine:** the
+installed file is now a **symlink** → the repo
+(`~/.local/share/typefree/typefree.py -> /home/hero/Documents/Gits/typefree/typefree.py`),
+so every repo edit + restart is live. (A fresh `install.sh` run would replace the
+symlink with a copy again — re-symlink after installing if developing.)
+
 ## 5. The ONE remaining manual step (blocker) — RESOLVED
 
 The user must **log out and back in** (or reboot) **once**. Reason: `hero` was
