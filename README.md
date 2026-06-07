@@ -158,6 +158,11 @@ bash uninstall.sh
 
 It also prints the manual cleanup commands (udev rule, `input` group, pip pkgs).
 
+## Docs
+
+- [`architecture.md`](architecture.md) — how it works and why, in depth.
+- [`memory.md`](memory.md) — project handoff log: what we did, why, what's next.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
