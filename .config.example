@@ -1,0 +1,25 @@
+# Speech-to-Text Hotkey Configuration
+# This file shows available customization options
+# Uncomment and modify as needed
+
+# Hotkey to use (single character: a-z)
+# Default: z (for Alt+Z)
+# STT_HOTKEY=z
+
+# Language for transcription
+# Default: en (English)
+# Supported: en, es, fr, de, zh, ja, ko, ar, pt, ru, etc.
+# STT_LANGUAGE=en
+
+# Whisper model size
+# tiny, base, small, medium, large
+# Default: base (good balance of speed and accuracy)
+# STT_MODEL=base
+
+# Enable clipboard output (true/false)
+# Default: true
+# STT_CLIPBOARD=true
+
+# Enable stdout output (true/false)
+# Default: true
+# STT_STDOUT=true
