@@ -1,6 +1,6 @@
 {
-  "hotkey": "z",
-  "modifier": "alt",
+  "hotkey": "rightctrl",
+  "modifier": "none",
   "mode": "hold",
   "model": "base",
   "language": "en",

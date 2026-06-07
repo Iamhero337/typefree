@@ -4,7 +4,8 @@
 > works, what's left, and what we want next** — so that a future session (me, the
 > user, or another AI) can resume *without re-deriving context*. Read this first.
 
-Last updated: 2026-06-07 (post-reboot: live end-to-end CONFIRMED working)
+Last updated: 2026-06-07 (reliable autostart + configurable hotkey; default now
+**Right Ctrl**, not Alt+Z. Repo pushed to GitHub. About to test a clean reinstall.)
 
 ---
 
@@ -15,7 +16,8 @@ Last updated: 2026-06-07 (post-reboot: live end-to-end CONFIRMED working)
   terminal/CLI, editor, chat). Output to **both** the cursor *and* the clipboard.
 - **Always on** (background daemon, auto-start on boot).
 - **Free** and prefer **offline**.
-- Hotkey: **`Alt+Z`**, and **customizable** to anything.
+- Hotkey: **customizable**, chosen at install. Default is now **Right Ctrl**
+  (was Alt+Z — see §4f for why letter hotkeys leak and F-keys can need Fn).
 - Recording style: **hold-to-talk** (hold to record, release to transcribe).
   Toggle (press to start / press again to stop) is also acceptable.
 - The user is **not technical about internals** — wants it to "just work",
@@ -60,7 +62,8 @@ test string round-tripped with **zero dropped characters**.
 
 ## 4. What was built (current state — all committed to git)
 
-Repo: `/home/hero/Documents/Gits/typefree` (git initialized, 2 commits).
+Repo: `/home/hero/Documents/Gits/typefree` — on GitHub at
+`git@github.com:Iamhero337/typefree.git` (`origin/main`).
 
 Files:
 - `typefree.py` — the daemon. evdev hotkey loop (hold/toggle), sounddevice
@@ -151,6 +154,67 @@ installed file is now a **symlink** → the repo
 so every repo edit + restart is live. (A fresh `install.sh` run would replace the
 symlink with a copy again — re-symlink after installing if developing.)
 
+## 4e. Reliable autostart (fixed a once-per-boot crash)
+
+Fresh install + reboot: the daemon **core-dumped once on every boot**, then
+systemd's `Restart` brought it back ~3s later — so `status.sh` always looked
+healthy and the failure hid in the journal (`qt.qpa.xcb: could not connect to
+display` → `qFatal` → SIGABRT core dump).
+
+Root cause: the user unit was `WantedBy=default.target`, so it started at early
+login **before** the KDE compositor exported `WAYLAND_DISPLAY`/`DISPLAY`. The
+`After=graphical-session.target` line was inert because the unit wasn't *wanted
+by* that target. Qt's tray init then hit no-display and aborted at the **C++
+level** — uncatchable by the Python `try/except` (so the "run headless" fallback
+never fired).
+
+Fixes (commit `49927fc`):
+- `typefree.service`: `PartOf=graphical-session.target` + `WantedBy=graphical-session.target`
+  so the `After=` ordering is effective and it starts only once a display exists.
+- `typefree.py`: `_wait_for_display()` guards Qt init (polls `WAYLAND_DISPLAY`/
+  `DISPLAY` up to 8s) — never touches Qt without a display, so it falls back to
+  the headless toasts+sound path instead of crashing.
+- `typefree-launch.sh` (new) + `.desktop`: clicking the app icon is now
+  **idempotent + self-healing** — `systemctl --user enable` (autostart) + `start`
+  + a confirmation toast. Installer fills the launcher's absolute path into the
+  `.desktop` (Exec can't expand `$HOME`). This is the manual fallback if boot
+  autostart ever doesn't take (e.g. first login before the `input` group is live).
+- **User CONFIRMED** clean autostart on a real reboot ("done it started").
+
+## 4f. Configurable hotkey + safe default (Alt+Z → Right Ctrl)
+
+Two real bugs with letter hotkeys, both because the daemon reads evdev
+**passively** (it never *consumes* the keystroke, so the focused app sees it too):
+1. **Leak:** pressing Alt+Z fast enough that `Z` registers before `Alt` types a
+   literal `z`. The user hit this hard in KDE's app-search field: **autorepeat
+   flooded `ZZZZZZ`** while held.
+2. **Fn trap:** F9 (a leak-proof function key) needs **Fn+F9** on media-key
+   keyboards — annoying. The user's keyboard does this.
+
+Also checked the user's idea of **Super+Z**: it's already KDE `MinimizeAll=Meta+Z`
+*and* still a letter combo (same leak) — rejected. (Scanned `kglobalshortcutsrc`;
+`Meta+Space`, `Ctrl+Space`, `Meta+grave`, `Menu`, `Pause` are FREE on this box.)
+
+Resolution:
+- **Default is now `rightctrl` / `none`** — no Fn, no character (can't leak),
+  and the desktop doesn't grab a lone Right Ctrl. The user is running it; the
+  daemon announces `🎤 Typefree ready — Right Ctrl`.
+- `typefree.py`: added non-letter keys to `KEYCODE` (`rightctrl`, `rightalt`,
+  `rightshift`, `menu`, `capslock`, `insert`, `home`, `end`, `pageup`, `pagedown`,
+  `pause`, `scrolllock`, `printscreen`), plus a `KEY_LABELS` map so the UI shows
+  "Right Ctrl" not "RIGHTCTRL". DEFAULT_CONFIG updated.
+- **`config.json` is now the single source of truth** for the hotkey: the
+  service unit **no longer** sets `TYPEFREE_HOTKEY/MODIFIER/MODE` (those env vars
+  would override config, defeating the picker). Env override still works if you
+  set it yourself. Only `YDOTOOL_SOCKET` stays in the unit.
+- `install.sh`: new **`choose_hotkey()`** picker (mirrors `choose_model()`),
+  written into config.json at install. Options: 1) Right Ctrl (recommended)
+  2) F9 (with Fn caveat) 3) Alt+Z 4) Menu 5) custom (`key` or `modifier+key`).
+  Honors `$TYPEFREE_HOTKEY`/`$TYPEFREE_MODIFIER`; defaults `rightctrl none` non-TTY.
+- **Multi-modifier (e.g. Ctrl+Alt+Z) is NOT supported yet** — daemon takes a
+  single modifier only. Open if the user wants it.
+- Docs (README, architecture, .desktop) updated to Right Ctrl.
+
 ## 5. The ONE remaining manual step (blocker) — RESOLVED
 
 The user must **log out and back in** (or reboot) **once**. Reason: `hero` was
@@ -183,13 +247,18 @@ immediately, e.g. the verification we used:
   daemon), runs on CPU not GPU.
 - User's current machine runs the **`small`** model (~1.2 GB measured), chosen
   2026-06-07 for better laptop accuracy.
+- ✅ DONE: hotkey is now chosen at install (`choose_hotkey()`), stored in
+  config.json; default Right Ctrl. See §4f.
+- ✅ DONE: reliable boot autostart + self-healing app launcher. See §4e.
+- ✅ DONE: repo pushed to **GitHub** (`git@github.com:Iamhero337/typefree.git`,
+  `origin/main`).
+- Possible: **multi-modifier hotkeys** (Ctrl+Alt+Z) — not supported yet.
 - Possible: a `typefree` CLI to change hotkey/model without editing JSON.
 - Possible: auto-paste fallback (`ydotool key ctrl+v`) for apps where typing is
   slow; note terminals need ctrl+shift+v.
 - Possible: VAD / silence trim, and a "type incrementally as you speak" mode.
 - Audio in the user service: confirm PortAudio reaches Pulse/PipeWire under
   systemd `--user` (worked in a normal shell; re-check inside the service).
-- Consider pushing the repo to GitHub (not done; no remote configured).
 
 ## 7. Gotchas / decisions to remember
 

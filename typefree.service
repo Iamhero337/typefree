@@ -13,9 +13,10 @@ Type=simple
 ExecStart=/usr/bin/python3 %h/.local/share/typefree/typefree.py
 Restart=on-failure
 RestartSec=3
-Environment=TYPEFREE_HOTKEY=z
-Environment=TYPEFREE_MODIFIER=alt
-Environment=TYPEFREE_MODE=hold
+# Hotkey, modifier, mode and model live in ~/.config/typefree/config.json
+# (chosen during install) — they are intentionally NOT set here, because
+# Environment= would override the user's config. TYPEFREE_* env vars still work
+# as a power-user override if you ever add them back.
 Environment=YDOTOOL_SOCKET=%t/.ydotool_socket
 StandardOutput=journal
 StandardError=journal

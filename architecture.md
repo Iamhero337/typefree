@@ -24,7 +24,7 @@ input subsystem, which works the same on X11 and Wayland.
 ## 2. The approach in one picture
 
 ```
-   ┌──────────────┐    Alt+Z (key events)     ┌──────────────────┐
+   ┌──────────────┐  Right-Ctrl (key events)  ┌──────────────────┐
    │   keyboard   │ ───────────────────────▶  │  typefree daemon │
    │ /dev/input/* │        (evdev read)        │   (typefree.py)  │
    └──────────────┘                            └────────┬─────────┘
@@ -104,9 +104,11 @@ root, because audio and the Wayland session live in the user session.
 
 - **`ydotoold.service`** — starts `ydotoold` with the user-owned socket.
 - **`typefree.service`** — runs `typefree.py`; `Wants=`/`After=ydotoold.service`
-  so the typing backend is up first. Carries `TYPEFREE_*` env defaults and
-  `YDOTOOL_SOCKET`.
-- Both are `enabled` (WantedBy `default.target`) → auto-start on login/boot.
+  so the typing backend is up first. Reads hotkey/model from `config.json`; the
+  unit only sets `YDOTOOL_SOCKET`. Bound to `graphical-session.target` so it
+  starts after the compositor exports the display (avoids a boot-time Qt crash).
+- `ydotoold` is `enabled` for login; `typefree` is `WantedBy=graphical-session.target`
+  → both auto-start once the desktop session is up.
 
 ```
 login session (user "hero", in group "input")
@@ -132,8 +134,8 @@ relogin, both services start cleanly and auto-run thereafter.
 
 | Key          | Values                                  | Meaning                         |
 |--------------|------------------------------------------|---------------------------------|
-| `hotkey`     | `a`–`z`, `space`, `f1`–`f12`             | main key                        |
-| `modifier`   | `alt`/`ctrl`/`shift`/`super`/`none`     | held with the key               |
+| `hotkey`     | `a`–`z`, `space`, `f1`–`f12`, or a non-letter key (`rightctrl`, `rightalt`, `menu`, `pause`, …) | main key (default `rightctrl`) |
+| `modifier`   | `alt`/`ctrl`/`shift`/`super`/`none`     | held with the key (default `none`) |
 | `mode`       | `hold` / `toggle`                        | push-to-talk vs press-on/off    |
 | `model`      | `tiny`/`base`/`small`/`medium`/`large`  | Whisper size                    |
 | `language`   | e.g. `en`, or `auto`                     | transcription language          |
@@ -169,7 +171,7 @@ Apply changes: `systemctl --user restart typefree.service`.
 
 | Symptom                          | Likely cause                                  | Fix                                   |
 |----------------------------------|-----------------------------------------------|---------------------------------------|
-| Alt+Z does nothing               | not in active `input` group                   | log out/in; `bash status.sh`          |
+| Right Ctrl does nothing          | not in active `input` group                   | log out/in; `bash status.sh`          |
 | services loop / won't start      | pre-relogin (no group) or uinput perms        | relogin; check `99-typefree-uinput.rules` |
 | text copied but not typed        | ydotoold down / `/dev/uinput` perms           | `systemctl --user status ydotoold`    |
 | first chars missing when typing  | old ydotool 0.1.8 (no daemon)                 | ensure 1.x from source is installed   |

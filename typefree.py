@@ -41,8 +41,13 @@ log = logging.getLogger("typefree")
 CONFIG_PATH = os.path.expanduser("~/.config/typefree/config.json")
 
 DEFAULT_CONFIG = {
-    "hotkey": "z",          # main key, combined with a modifier below
-    "modifier": "alt",      # alt | ctrl | super | shift | none
+    "hotkey": "rightctrl",  # main key, combined with a modifier below
+    "modifier": "none",     # alt | ctrl | super | shift | none
+                            # default is a bare Right-Ctrl on purpose: it needs
+                            # no Fn (unlike F-keys on media keyboards), produces
+                            # no character (so a leaked keystroke can't type
+                            # text — a letter hotkey floods "zzz" via autorepeat),
+                            # and isn't grabbed by the desktop on its own.
     "mode": "hold",         # hold | toggle
     "model": "base",        # whisper: tiny|base|small|medium|large
     "language": "en",       # transcription language, or "auto"
@@ -77,6 +82,16 @@ KEYCODE = {
     "f6": ecodes.KEY_F6, "f7": ecodes.KEY_F7, "f8": ecodes.KEY_F8,
     "f9": ecodes.KEY_F9, "f10": ecodes.KEY_F10, "f11": ecodes.KEY_F11,
     "f12": ecodes.KEY_F12,
+    # Non-character keys usable as a standalone hotkey (modifier = none).
+    # Handy when the F-row needs Fn to reach (media-key keyboards) — these need
+    # no Fn and still type nothing. "rightctrl" is the ergonomic default.
+    "rightctrl": ecodes.KEY_RIGHTCTRL, "rightalt": ecodes.KEY_RIGHTALT,
+    "rightshift": ecodes.KEY_RIGHTSHIFT, "menu": ecodes.KEY_COMPOSE,
+    "capslock": ecodes.KEY_CAPSLOCK, "insert": ecodes.KEY_INSERT,
+    "home": ecodes.KEY_HOME, "end": ecodes.KEY_END,
+    "pageup": ecodes.KEY_PAGEUP, "pagedown": ecodes.KEY_PAGEDOWN,
+    "pause": ecodes.KEY_PAUSE, "scrolllock": ecodes.KEY_SCROLLLOCK,
+    "printscreen": ecodes.KEY_SYSRQ,
 }
 
 MODIFIERS = {
@@ -85,6 +100,15 @@ MODIFIERS = {
     "shift": {ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT},
     "super": {ecodes.KEY_LEFTMETA, ecodes.KEY_RIGHTMETA},
     "none": set(),
+}
+
+# Pretty names for keys that shouldn't be shown as a bare uppercase token
+# (used in the "ready" log line, toast, and tray tooltip).
+KEY_LABELS = {
+    "rightctrl": "Right Ctrl", "rightalt": "Right Alt",
+    "rightshift": "Right Shift", "menu": "Menu", "capslock": "Caps Lock",
+    "pageup": "Page Up", "pagedown": "Page Down", "scrolllock": "Scroll Lock",
+    "printscreen": "Print Screen", "space": "Space",
 }
 
 
@@ -359,8 +383,9 @@ class Typefree:
             )
             sys.exit(1)
         modname = self.cfg["modifier"]
-        combo = self.cfg["hotkey"].upper() if modname == "none" \
-            else f"{modname.capitalize()}+{self.cfg['hotkey'].upper()}"
+        keyname = KEY_LABELS.get(self.cfg["hotkey"], self.cfg["hotkey"].upper())
+        combo = keyname if modname == "none" \
+            else f"{modname.capitalize()}+{keyname}"
         log.info("=" * 52)
         log.info("🎤 Typefree ready — %s (%s mode)", combo, self.mode)
         log.info("Listening on %d keyboard(s)", len(kbds))

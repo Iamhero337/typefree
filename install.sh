@@ -63,6 +63,66 @@ choose_model() {
     echo "$model"
 }
 
+# ----------------------------------------------------------------------
+# Let the user pick the dictation hotkey at install time. You HOLD the key,
+# speak, then release. The catch: the daemon reads the keyboard passively, so a
+# *letter* hotkey (e.g. Alt+Z) can leak its letter into the focused app if the
+# letter registers a hair before its modifier — KDE's search field famously
+# fills with "zzzz" via autorepeat. A non-character key (Right Ctrl, a function
+# key, Menu) never produces text, so it's the safe choice; letter combos are
+# offered for those who prefer the mnemonic and accept the trade-off. Right Ctrl
+# is the default because it also needs no Fn (F-keys can on media keyboards).
+# Echoes two words on stdout: "HOTKEY MODIFIER" (modifier 'none' for plain keys).
+# Honors $TYPEFREE_HOTKEY/$TYPEFREE_MODIFIER; defaults to "rightctrl none" (no TTY).
+choose_hotkey() {
+    if [ -n "$TYPEFREE_HOTKEY" ]; then
+        echo "$TYPEFREE_HOTKEY ${TYPEFREE_MODIFIER:-none}"; return
+    fi
+    if [ ! -t 0 ]; then
+        echo "rightctrl none"; return
+    fi
+    {
+        echo ""
+        echo "  Choose your dictation hotkey — you HOLD it, speak, then release."
+        echo ""
+        echo "    1) Right Ctrl  no modifier  ✦ recommended — needs no Fn, types no"
+        echo "                                  character (can't leak text), and the"
+        echo "                                  desktop doesn't grab it on its own"
+        echo "    2) F9          no modifier    leak-proof too, BUT on media-key"
+        echo "                                  keyboards it may need Fn+F9 to reach"
+        echo "    3) Alt + Z     letter combo   familiar, but a fast/simultaneous"
+        echo "                                  press can leak 'z' into the field"
+        echo "    4) Menu key    no modifier    the context-menu key; types nothing"
+        echo "    5) custom      type your own, e.g.  'pause'  or  'ctrl+space'"
+        echo ""
+    } >&2
+    local choice key mod custom
+    read -rp "  Pick 1-5 [1]: " choice >&2
+    case "$choice" in
+        2) key=f9;   mod=none ;;
+        3) key=z;    mod=alt  ;;
+        4) key=menu; mod=none ;;
+        5)
+            read -rp "  Enter hotkey (key, or modifier+key): " custom >&2
+            custom="$(printf '%s' "$custom" | tr 'A-Z' 'a-z' | tr -d ' ')"
+            if [ -z "$custom" ]; then
+                key=rightctrl; mod=none
+            elif printf '%s' "$custom" | grep -q '+'; then
+                mod="${custom%%+*}"; key="${custom##*+}"
+            else
+                key="$custom"; mod=none
+            fi
+            ;;
+        *) key=rightctrl; mod=none ;;
+    esac
+    if [ "$mod" = none ]; then
+        echo "  → using ${key^^}" >&2
+    else
+        echo "  → using ${mod^}+${key^^}" >&2
+    fi
+    echo "$key $mod"
+}
+
 say "========================================"
 say "🎤 Typefree installer (Wayland + X11)"
 say "========================================\n"
@@ -137,17 +197,20 @@ chmod +x "$SHARE_DIR/typefree-launch.sh"
 if [ ! -f "$CFG_DIR/config.json" ]; then
     cp config.example.json "$CFG_DIR/config.json"
     MODEL="$(choose_model)"
-    python3 - "$CFG_DIR/config.json" "$MODEL" <<'PY'
+    read -r HOTKEY MODIFIER <<<"$(choose_hotkey)"
+    python3 - "$CFG_DIR/config.json" "$MODEL" "$HOTKEY" "$MODIFIER" <<'PY'
 import json, sys
-path, model = sys.argv[1], sys.argv[2]
+path, model, hotkey, modifier = sys.argv[1:5]
 with open(path) as f:
     cfg = json.load(f)
 cfg["model"] = model
+cfg["hotkey"] = hotkey
+cfg["modifier"] = modifier
 with open(path, "w") as f:
     json.dump(cfg, f, indent=2)
     f.write("\n")
 PY
-    say "   wrote config (model='$MODEL') to $CFG_DIR/config.json"
+    say "   wrote config (model='$MODEL', hotkey='$HOTKEY', modifier='$MODIFIER') to $CFG_DIR/config.json"
 else
     say "   keeping existing config at $CFG_DIR/config.json"
 fi

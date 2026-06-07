@@ -2,7 +2,7 @@
 Type=Application
 Name=Typefree
 GenericName=Speech-to-Text
-Comment=Start talk-to-type — hold Alt+Z, speak, text appears at your cursor
+Comment=Start talk-to-type — hold Right Ctrl, speak, text appears at your cursor
 Icon=typefree
 Exec=__LAUNCHER__
 Terminal=false

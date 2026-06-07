@@ -9,7 +9,7 @@ It's the Linux answer to Windows' `Win+H` — and it works on **Wayland** (KDE,
 GNOME, …) *and* X11.
 
 ```
-Hold  Alt+Z  →  speak  →  release  →  text appears where your cursor is
+Hold Right-Ctrl →  speak  →  release  →  text appears where your cursor is
 ```
 
 ---
@@ -70,7 +70,7 @@ After that it auto-starts on every boot.
 
 ## Usage
 
-1. **Hold `Alt+Z`**
+1. **Hold `Right Ctrl`**
 2. **Speak**
 3. **Release**
 
@@ -83,8 +83,9 @@ Edit `~/.config/typefree/config.json`:
 
 ```json
 {
-  "hotkey": "z",          // any letter, "space", or "f1".."f12"
-  "modifier": "alt",      // alt | ctrl | shift | super | none
+  "hotkey": "rightctrl",  // letter, "space", "f1".."f12", or a non-letter key
+                          // like "rightctrl"/"rightalt"/"menu"/"pause"
+  "modifier": "none",     // alt | ctrl | shift | super | none
   "mode": "hold",         // hold = hold-to-talk | toggle = press on/off
   "model": "base",        // tiny | base | small | medium | large
   "language": "en",       // language code, or "auto" to detect
@@ -93,6 +94,11 @@ Edit `~/.config/typefree/config.json`:
   "sample_rate": 16000
 }
 ```
+
+> The default is **Right Ctrl** on purpose: it needs no Fn key and types no
+> character, so it can't leak text into the focused app. A *letter* hotkey like
+> `Alt+Z` can leak its letter (or flood `zzzz` via autorepeat) because the
+> daemon reads the keyboard without consuming the keystroke.
 
 Apply changes:
 
@@ -104,9 +110,10 @@ systemctl --user restart typefree.service
 - Want push-to-toggle instead of push-to-talk? Set `"mode": "toggle"` (press
   once to start, again to stop).
 - More accuracy? Use `"model": "small"` or `"medium"` (slower, larger download).
-- The env vars `TYPEFREE_HOTKEY`, `TYPEFREE_MODIFIER`, `TYPEFREE_MODE`,
-  `TYPEFREE_MODEL`, `TYPEFREE_LANGUAGE` override the config (set in the
-  service unit).
+- The hotkey is chosen during install and stored in `config.json` (the service
+  unit no longer hardcodes it). The env vars `TYPEFREE_HOTKEY`,
+  `TYPEFREE_MODIFIER`, `TYPEFREE_MODE`, `TYPEFREE_MODEL`, `TYPEFREE_LANGUAGE`
+  still override the config if you set them yourself.
 
 ## Commands
 
@@ -122,7 +129,7 @@ systemctl --user stop typefree.service
 ## How it works
 
 ```
-  ┌────────────┐   Alt+Z    ┌───────────┐  audio   ┌──────────┐
+  ┌────────────┐  Right-Ctrl ┌───────────┐  audio   ┌──────────┐
   │  keyboard  │──────────▶ │ typefree  │ ───────▶ │ Whisper  │
   │ /dev/input │   evdev    │  daemon   │          │ (offline)│
   └────────────┘            └─────┬─────┘          └────┬─────┘
@@ -135,7 +142,7 @@ systemctl --user stop typefree.service
 
 ## Troubleshooting
 
-**Nothing happens on Alt+Z**
+**Nothing happens on Right Ctrl**
 - `bash status.sh` — is `typefree` running and the `input` group active?
 - If the group isn't active, log out/in.
 
