@@ -131,6 +131,8 @@ say "📁 Installing app to $SHARE_DIR ..."
 mkdir -p "$SHARE_DIR" "$USER_UNIT_DIR" "$CFG_DIR"
 cp typefree.py "$SHARE_DIR/"
 chmod +x "$SHARE_DIR/typefree.py"
+cp typefree-launch.sh "$SHARE_DIR/"
+chmod +x "$SHARE_DIR/typefree-launch.sh"
 
 if [ ! -f "$CFG_DIR/config.json" ]; then
     cp config.example.json "$CFG_DIR/config.json"
@@ -167,7 +169,9 @@ ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
 APP_DIR="$HOME/.local/share/applications"
 mkdir -p "$ICON_DIR" "$APP_DIR"
 cp typefree.svg "$ICON_DIR/typefree.svg"
-cp typefree.desktop "$APP_DIR/typefree.desktop"
+# Fill in the absolute launcher path (.desktop Exec can't use $HOME/%h).
+sed "s#__LAUNCHER__#$SHARE_DIR/typefree-launch.sh#" \
+    typefree.desktop > "$APP_DIR/typefree.desktop"
 command -v update-desktop-database >/dev/null && update-desktop-database "$APP_DIR" 2>/dev/null || true
 command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -qtf "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 say "   added 'Typefree' to your app menu"

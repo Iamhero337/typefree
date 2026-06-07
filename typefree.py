@@ -402,9 +402,32 @@ class Typefree:
                 os._exit(1)
 
     # ---- system tray ----------------------------------------------------
+    @staticmethod
+    def _wait_for_display(timeout=8.0):
+        """Return True once a display is reachable, else False after `timeout`.
+
+        Qt aborts the *whole process* with qFatal()/SIGABRT if it can't connect
+        to a display — that's a C++ abort, not a Python exception, so the
+        try/except around Tray() cannot catch it. We must therefore confirm a
+        display exists *before* importing Qt. At boot the systemd service can
+        start a hair before the compositor exports WAYLAND_DISPLAY/DISPLAY, so
+        we poll briefly to absorb that race rather than giving up immediately.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            if os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY"):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.5)
+
     def _make_tray(self, combo):
         """Build a QSystemTrayIcon. Returns a Tray object, or None if Qt/the
         tray is unavailable (daemon then runs headless with toasts+sound)."""
+        if not self._wait_for_display():
+            log.warning("no display (WAYLAND_DISPLAY/DISPLAY unset); "
+                        "running headless with toasts+sound")
+            return None
         try:
             from PyQt5.QtWidgets import (
                 QApplication, QSystemTrayIcon, QMenu, QAction,

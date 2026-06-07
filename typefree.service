@@ -1,6 +1,11 @@
 [Unit]
 Description=Typefree - Speech-to-Text global hotkey daemon
+# Bind to the graphical session: PartOf + WantedBy=graphical-session.target make
+# the After= ordering effective, so the daemon only starts once the compositor
+# has exported WAYLAND_DISPLAY/DISPLAY. Without this the tray's Qt init races the
+# session at boot and the process core-dumps (qFatal: no display).
 After=graphical-session.target ydotoold.service
+PartOf=graphical-session.target
 Wants=ydotoold.service
 
 [Service]
@@ -16,4 +21,4 @@ StandardOutput=journal
 StandardError=journal
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
