@@ -4,7 +4,7 @@
 > works, what's left, and what we want next** — so that a future session (me, the
 > user, or another AI) can resume *without re-deriving context*. Read this first.
 
-Last updated: 2026-06-07
+Last updated: 2026-06-07 (post-reboot: live end-to-end CONFIRMED working)
 
 ---
 
@@ -89,7 +89,31 @@ Files:
 - ✅ udev rule applied: `/dev/uinput` is `crw-rw---- root input`.
 - ✅ Both services `enabled` for auto-start.
 
-## 5. The ONE remaining manual step (blocker)
+## 4b. User feedback (added after reboot — the "how do I know it's running?" fix)
+
+After the reboot cleared the `input`-group blocker, both services auto-started
+and a live mic test **worked end-to-end** (hold Alt+Z → speech typed at cursor +
+on clipboard). The user's next concern: a silent background daemon gives **no
+indication** it's recording/working — all status went only to the journal.
+
+So we added **two-channel feedback** (both toggleable in config: `notify`, `sound`):
+- **On-screen toasts** via `notify-send` (libnotify-bin). Uses
+  `x-canonical-private-synchronous:typefree` hint so toasts replace in one slot
+  instead of stacking. States: 🎤 ready (on boot) · 🎙️ Listening… (record start)
+  · ⏳ Transcribing… (release) · 📝 Typed: <preview> (success) · 🔇 No speech /
+  🤚 Too short / ⚠️ failed (problems).
+- **Sound cues** via `paplay` (already present) playing freedesktop `.oga`:
+  `message-new-instant` (start) · `complete` (done) · `dialog-warning` (empty/err).
+  Files live in `/usr/share/sounds/freedesktop/stereo/`.
+
+Helpers `_notify()` / `_play()` in `typefree.py` are best-effort & non-blocking
+(`subprocess.Popen`, swallow errors) so feedback never breaks dictation.
+`libnotify-bin` added to `install.sh` apt deps. Service env already has
+`DBUS_SESSION_BUS_ADDRESS` + `WAYLAND_DISPLAY`, so toasts reach the screen from
+the `systemd --user` unit. **User confirmed: "it works perfectly, I got what I
+wanted."**
+
+## 5. The ONE remaining manual step (blocker) — RESOLVED
 
 The user must **log out and back in** (or reboot) **once**. Reason: `hero` was
 added to the `input` group, but Linux only applies new group membership on a
@@ -110,8 +134,10 @@ immediately, e.g. the verification we used:
 
 ## 6. What we want next / open ideas (not done yet)
 
-- Confirm end-to-end after the user relogs in (run status.sh + a live mic test).
-- Possible: a small GUI/tray indicator showing recording state.
+- ✅ DONE: confirmed end-to-end after reboot (live mic test passed).
+- ✅ DONE: recording-state feedback — toasts + sounds (see §4b). A persistent
+  tray icon is still possible but toasts already cover the need.
+- ✅ CONFIRMED: PortAudio reaches Pulse/PipeWire from the `--user` service.
 - Possible: a `typefree` CLI to change hotkey/model without editing JSON.
 - Possible: auto-paste fallback (`ydotool key ctrl+v`) for apps where typing is
   slow; note terminals need ctrl+shift+v.

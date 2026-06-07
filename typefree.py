@@ -48,8 +48,18 @@ DEFAULT_CONFIG = {
     "language": "en",       # transcription language, or "auto"
     "type_out": True,       # type text at the cursor
     "clipboard": True,      # also copy to clipboard
+    "notify": True,         # show on-screen toast (recording / result)
+    "sound": True,          # play a short audio cue (start / done / empty)
     "sample_rate": 16000,
 }
+
+# freedesktop sound cues (played via paplay / pw-play)
+SOUNDS = {
+    "start": "message-new-instant",
+    "done": "complete",
+    "empty": "dialog-warning",
+}
+SOUND_DIR = "/usr/share/sounds/freedesktop/stereo"
 
 # map friendly names -> evdev key codes
 KEYCODE = {
@@ -167,6 +177,8 @@ class Typefree:
         self._have_ydotool = shutil.which("ydotool") is not None
         self._have_wlcopy = shutil.which("wl-copy") is not None
         self._have_xclip = shutil.which("xclip") is not None
+        self._notify_bin = shutil.which("notify-send")
+        self._play_bin = shutil.which("paplay") or shutil.which("pw-play")
         self._load_model()
 
     def _load_model(self):
@@ -174,6 +186,46 @@ class Typefree:
         log.info("Loading Whisper model '%s' ...", self.cfg["model"])
         self.model = whisper.load_model(self.cfg["model"])
         log.info("Model ready.")
+
+    # ---- user feedback (toast + sound) ---------------------------------
+    def _notify(self, title, body="", urgency="normal"):
+        """Show/replace a desktop toast. Best-effort, never blocks."""
+        if not (self.cfg["notify"] and self._notify_bin):
+            return
+        try:
+            subprocess.Popen(
+                [
+                    self._notify_bin,
+                    "-a", "Typefree",
+                    "-i", "audio-input-microphone",
+                    "-u", urgency,
+                    "-t", "2500",
+                    # collapse onto one slot instead of stacking
+                    "-h", "string:x-canonical-private-synchronous:typefree",
+                    title, body,
+                ],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            log.debug("notify failed: %s", e)
+
+    def _play(self, which):
+        """Play a short sound cue asynchronously. Best-effort."""
+        if not (self.cfg["sound"] and self._play_bin):
+            return
+        name = SOUNDS.get(which)
+        if not name:
+            return
+        path = os.path.join(SOUND_DIR, name + ".oga")
+        if not os.path.exists(path):
+            return
+        try:
+            subprocess.Popen(
+                [self._play_bin, path],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            log.debug("sound failed: %s", e)
 
     # ---- output ---------------------------------------------------------
     def _type_text(self, text):
@@ -214,6 +266,11 @@ class Typefree:
         except Exception as e:
             log.error("could not start mic: %s", e)
             self.recording = False
+            self._notify("🎤 Mic error", str(e), urgency="critical")
+            self._play("empty")
+            return
+        self._notify("🎙️ Listening…", "Speak now — release to type")
+        self._play("start")
 
     def _stop_and_transcribe(self):
         if not self.recording:
@@ -221,12 +278,15 @@ class Typefree:
         self.recording = False
         self.busy = True
         log.info("⏹️  transcribing...")
+        self._notify("⏳ Transcribing…", "")
 
         def work():
             try:
                 audio = self.recorder.stop()
                 if audio is None or len(audio) < self.cfg["sample_rate"] // 4:
                     log.info("(too short / nothing recorded)")
+                    self._notify("🤚 Too short", "Hold the key while you speak")
+                    self._play("empty")
                     return
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                     wavfile.write(f.name, self.cfg["sample_rate"], audio)
@@ -237,12 +297,19 @@ class Typefree:
                 text = result["text"].strip()
                 if not text:
                     log.info("(no speech detected)")
+                    self._notify("🔇 No speech detected", "")
+                    self._play("empty")
                     return
                 log.info("📝 %s", text)
                 self._clip_text(text)
                 self._type_text(text)
+                preview = text if len(text) <= 80 else text[:77] + "…"
+                self._notify("📝 Typed", preview)
+                self._play("done")
             except Exception as e:
                 log.error("transcription error: %s", e)
+                self._notify("⚠️ Transcription failed", str(e), urgency="critical")
+                self._play("empty")
             finally:
                 self.busy = False
 
@@ -286,7 +353,11 @@ class Typefree:
         log.info("Listening on %d keyboard(s)", len(kbds))
         if not self._have_ydotool:
             log.warning("ydotool not found: text won't be typed at cursor")
+        if self.cfg["notify"] and not self._notify_bin:
+            log.warning("notify-send not found: no on-screen toasts "
+                        "(install 'libnotify-bin')")
         log.info("=" * 52)
+        self._notify("🎤 Typefree ready", f"Hold {combo} to dictate")
 
         fds = {dev.fd: dev for dev in kbds}
         while True:

@@ -36,6 +36,7 @@ run_sudo apt-get update -qq
 run_sudo apt-get install -y -qq \
     python3-pip python3-dev \
     wl-clipboard xclip \
+    libnotify-bin \
     libportaudio2 portaudio19-dev \
     ffmpeg alsa-utils \
     git cmake gcc scdoc 2>/dev/null || {
