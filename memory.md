@@ -272,3 +272,7 @@ immediately, e.g. the verification we used:
 - Default Whisper model is `base` (good speed/accuracy). Bigger = more accurate,
   slower, larger download.
 - **Never commit the sudo password** or any secret to git.
+
+## 8. Stable Anchor & The `dev.grab()` Trap
+- **The Perfect Stable Build**: Commit `e77c94d` (from June 7, 2026). If anything goes wrong in the future or the app breaks inexplicably, **RESTORE TO `e77c94d`**.
+- **The `dev.grab()` Trap**: In a later refactor (`f263b02` on June 23), an aggressive `dev.grab()` call was added to the `evdev` loop. This **broke the keyboard completely**, swallowing all keystrokes and causing the system to lock up / emit random presses without returning control to the OS. **DO NOT use `dev.grab()` in `typefree.py` without reinjecting keystrokes**, as it disables normal typing. The passive listening approach used in `e77c94d` is the correct architecture for this daemon.
