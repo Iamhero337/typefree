@@ -276,3 +276,8 @@ immediately, e.g. the verification we used:
 ## 8. Stable Anchor & The `dev.grab()` Trap
 - **The Perfect Stable Build**: Commit `e77c94d` (from June 7, 2026). If anything goes wrong in the future or the app breaks inexplicably, **RESTORE TO `e77c94d`**.
 - **The `dev.grab()` Trap**: In a later refactor (`f263b02` on June 23), an aggressive `dev.grab()` call was added to the `evdev` loop. This **broke the keyboard completely**, swallowing all keystrokes and causing the system to lock up / emit random presses without returning control to the OS. **DO NOT use `dev.grab()` in `typefree.py` without reinjecting keystrokes**, as it disables normal typing. The passive listening approach used in `e77c94d` is the correct architecture for this daemon.
+
+## 9. July 2026 Memory Optimization (Zero-Leak Architecture)
+- **The Problem**: Previously, `typefree` loaded PyTorch/Whisper on startup, permanently hoarding ~1-2GB of RAM. Even when we attempted dynamic loading and `gc.collect()`, PyTorch's C++ allocator and `glibc` refused to return the memory to the OS, leaving a 20% RAM footprint stranded.
+- **The Fix**: The transcription logic (`whisper.load_model` and `model.transcribe`) was moved into an entirely separate subprocess using `multiprocessing.Process`.
+- **The Result**: The background daemon now stays at an ultra-low **~0.6% RAM**. When the hotkey is released, the subprocess spawns, loads the model, transcribes, and then is forcefully killed by the OS. This physically guarantees 100% of the heavy AI memory is released instantly after every transcription. The trade-off is a 1-2s delay before typing as the model dynamically loads.

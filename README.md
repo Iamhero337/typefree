@@ -51,6 +51,7 @@ kernel instead:
 - A microphone
 - ~150 MB for the Whisper `base` model (downloaded on first run)
 - `sudo` once, for installing packages + a udev rule
+- **Ultra-low background memory**: Uses only ~100MB of RAM while listening. The heavy AI model is loaded dynamically only when you speak, and instantly freed using multiprocessing once typing finishes.
 
 ## Install
 

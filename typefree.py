@@ -128,6 +128,25 @@ def load_config():
     cfg["language"] = os.environ.get("TYPEFREE_LANGUAGE", cfg["language"])
     return cfg
 
+def run_transcription(cfg, path, result_queue):
+    import whisper
+    import logging
+    log = logging.getLogger("typefree_child")
+    log.info("Loading Whisper model '%s' in child process ...", cfg["model"])
+    model = whisper.load_model(cfg["model"])
+    lang = None if cfg["language"] == "auto" else cfg["language"]
+    
+    result = model.transcribe(
+        path,
+        language=lang,
+        fp16=False,
+        no_speech_threshold=0.3,
+        logprob_threshold=-1.5,
+        compression_ratio_threshold=2.8,
+        condition_on_previous_text=True,
+        temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+    )
+    result_queue.put(result["text"].strip())
 
 def find_keyboards():
     """Return evdev devices that look like keyboards (have letter keys)."""
@@ -160,8 +179,7 @@ class Recorder:
         def cb(indata, frames, time_info, status):
             if status:
                 log.debug("audio status: %s", status)
-            if self._active:
-                self._q.put(indata.copy())
+            self._q.put(indata.copy())
 
         self._stream = sd.InputStream(
             samplerate=self.sample_rate, channels=1, dtype="float32", callback=cb
@@ -179,8 +197,13 @@ class Recorder:
         except Exception:
             pass
         self._stream = None
-        while not self._q.empty():
-            self._frames.append(self._q.get())
+        # Drain all remaining frames — get_nowait avoids blocking and
+        # is safe here because the stream is already stopped.
+        while True:
+            try:
+                self._frames.append(self._q.get_nowait())
+            except queue.Empty:
+                break
         if not self._frames:
             return None
         audio = np.concatenate(self._frames, axis=0).flatten()
@@ -207,13 +230,6 @@ class Typefree:
         self._have_xclip = shutil.which("xclip") is not None
         self._notify_bin = shutil.which("notify-send")
         self._play_bin = shutil.which("paplay") or shutil.which("pw-play")
-        self._load_model()
-
-    def _load_model(self):
-        import whisper  # imported late so --help etc. stays fast
-        log.info("Loading Whisper model '%s' ...", self.cfg["model"])
-        self.model = whisper.load_model(self.cfg["model"])
-        log.info("Model ready.")
 
     # ---- user feedback (toast + sound) ---------------------------------
     def _notify(self, title, body="", urgency="normal"):
@@ -317,6 +333,7 @@ class Typefree:
 
         def work():
             try:
+                import gc
                 audio = self.recorder.stop()
                 if audio is None or len(audio) < self.cfg["sample_rate"] // 4:
                     log.info("(too short / nothing recorded)")
@@ -326,10 +343,21 @@ class Typefree:
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                     wavfile.write(f.name, self.cfg["sample_rate"], audio)
                     path = f.name
+                duration_s = len(audio) / self.cfg["sample_rate"]
+                log.info("recorded %.1f s of audio", duration_s)
                 lang = None if self.cfg["language"] == "auto" else self.cfg["language"]
-                result = self.model.transcribe(path, language=lang, fp16=False)
+                
+                self._notify("⏳ Loading model & Transcribing…", "")
+                
+                import multiprocessing as mp
+                q = mp.Queue()
+                p = mp.Process(target=run_transcription, args=(self.cfg, path, q))
+                p.start()
+                p.join()
+                
                 os.unlink(path)
-                text = result["text"].strip()
+                
+                text = q.get() if not q.empty() else ""
                 if not text:
                     log.info("(no speech detected)")
                     self._notify("🔇 No speech detected", "")
