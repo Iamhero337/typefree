@@ -51,7 +51,12 @@ kernel instead:
 - A microphone
 - ~150 MB for the Whisper `base` model (downloaded on first run)
 - `sudo` once, for installing packages + a udev rule
-- **Ultra-low background memory**: Uses only ~100MB of RAM while listening. The heavy AI model is loaded dynamically only when you speak, and instantly freed using multiprocessing once typing finishes.
+- **Fast + low background memory**: the daemon itself uses ~100 MB. The Whisper model
+  runs in a separate worker process that starts loading the moment you *press* the
+  hotkey (so it's ready by the time you release), transcribes on your NVIDIA GPU if
+  you have one ([faster-whisper](https://github.com/SYSTRAN/faster-whisper)), and
+  exits after `keep_warm_s` idle seconds to give the memory back. Text typically
+  appears well under a second after you release the key.
 
 ## Install
 
@@ -104,7 +109,12 @@ Edit `~/.config/typefree/config.json`:
   "language": "en",       // language code, or "auto" to detect
   "type_out": true,       // type at the cursor
   "clipboard": true,      // also copy to clipboard
-  "sample_rate": 16000
+  "sample_rate": 16000,
+  "device": "auto",       // auto (GPU if available) | cuda | cpu
+  "keep_warm_s": 300,     // keep the model loaded this long after a dictation;
+                          // 0 = free the memory right away (a bit slower)
+  "type_delay_ms": 1      // per-key typing delay; raise to 5-10 if an app
+                          // drops characters
 }
 ```
 
@@ -166,6 +176,9 @@ systemctl --user stop typefree.service
 **No speech detected / poor accuracy**
 - Check the mic: `arecord -l`, and your default source in `pavucontrol`.
 - Try a bigger model (`small`/`medium`) in the config.
+
+**Some characters go missing when typing into one app**
+- Raise `"type_delay_ms"` (e.g. `5`) in the config and restart the service.
 
 **Wrong keyboard layout in typed text**
 - ydotool types by keycode; exotic layouts may differ. File an issue.

@@ -21,13 +21,11 @@ import queue
 import shutil
 import select
 import logging
-import tempfile
 import threading
 import subprocess
 
 import numpy as np
 import sounddevice as sd
-import scipy.io.wavfile as wavfile
 import evdev
 from evdev import ecodes
 
@@ -57,6 +55,11 @@ DEFAULT_CONFIG = {
     "sound": True,          # play a short audio cue (start / done / empty)
     "tray": True,           # show a system-tray icon (status + menu)
     "sample_rate": 16000,
+    "device": "auto",       # auto | cuda | cpu  (auto = GPU when available)
+    "keep_warm_s": 300,     # keep the model loaded this long after a dictation
+                            # (instant repeat dictations); 0 = free RAM at once
+    "type_delay_ms": 1,     # per-key delay for ydotool (its default, 20, types
+                            # only ~25 chars/s — a long dictation took 15 s+)
 }
 
 # freedesktop sound cues (played via paplay / pw-play).
@@ -128,25 +131,256 @@ def load_config():
     cfg["language"] = os.environ.get("TYPEFREE_LANGUAGE", cfg["language"])
     return cfg
 
-def run_transcription(cfg, path, result_queue):
-    import whisper
-    import logging
-    log = logging.getLogger("typefree_child")
-    log.info("Loading Whisper model '%s' in child process ...", cfg["model"])
-    model = whisper.load_model(cfg["model"])
+# ---- transcription worker (separate process) ------------------------------
+# The model lives in a child process so the daemon itself stays tiny (~100 MB):
+# PyTorch/CTranslate2 never give their memory back to the OS, but a process
+# exit does. For speed, the worker is started the moment you *press* the hotkey
+# (the model loads while you speak), and it stays warm for `keep_warm_s`
+# seconds after each dictation so back-to-back dictations are instant.
+
+TEMPERATURES = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+
+
+def _load_engine(cfg):
+    """Load the fastest available Whisper engine. Returns (transcribe_fn, desc).
+
+    Prefers faster-whisper (CTranslate2): ~4x faster than openai-whisper and
+    on the GPU when there is one. Falls back to CPU if CUDA fails, and to
+    openai-whisper if faster-whisper isn't installed.
+    """
     lang = None if cfg["language"] == "auto" else cfg["language"]
-    
-    result = model.transcribe(
-        path,
-        language=lang,
-        fp16=False,
-        no_speech_threshold=0.3,
-        logprob_threshold=-1.5,
-        compression_ratio_threshold=2.8,
-        condition_on_previous_text=True,
-        temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
-    )
-    result_queue.put(result["text"].strip())
+    want = cfg.get("device", "auto")
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        WhisperModel = None
+
+    if WhisperModel is not None:
+        import ctranslate2
+        devices = []
+        if want in ("auto", "cuda") and ctranslate2.get_cuda_device_count() > 0:
+            devices.append(("cuda", "float16"))
+        if want in ("auto", "cpu") or not devices:
+            devices.append(("cpu", "int8"))
+        threads = max(1, min(8, (os.cpu_count() or 2) // 2))
+        last_err = None
+        for device, compute in devices:
+            try:
+                kw = dict(device=device, compute_type=compute, cpu_threads=threads)
+                try:  # skip the Hugging Face network round-trip when cached
+                    model = WhisperModel(cfg["model"], local_files_only=True, **kw)
+                except Exception:
+                    log.info("downloading faster-whisper model '%s' (one-time) ...",
+                             cfg["model"])
+                    model = WhisperModel(cfg["model"], **kw)
+                beam = 5 if device == "cuda" else 1  # beam search is ~free on GPU
+
+                def transcribe(audio, model=model, beam=beam):
+                    segments, _ = model.transcribe(
+                        audio,
+                        language=lang,
+                        beam_size=beam,
+                        # Silero VAD drops silence: faster, and it stops the
+                        # "you" / "Thank you." hallucinations on empty clips.
+                        vad_filter=True,
+                        no_speech_threshold=0.3,
+                        log_prob_threshold=-1.5,
+                        compression_ratio_threshold=2.8,
+                        condition_on_previous_text=True,
+                        temperature=TEMPERATURES,
+                    )
+                    return "".join(s.text for s in segments).strip()
+
+                # warm-up pass: first CUDA call pays kernel/cuBLAS init costs
+                transcribe(np.zeros(16000, dtype=np.float32))
+                return transcribe, f"faster-whisper {cfg['model']} on {device} ({compute})"
+            except Exception as e:
+                last_err = e
+                log.warning("faster-whisper on %s failed: %s", device, e)
+        log.warning("falling back to openai-whisper (%s)", last_err)
+
+    import whisper
+    import torch
+    device = "cuda" if want != "cpu" and torch.cuda.is_available() else "cpu"
+    model = whisper.load_model(cfg["model"], device=device)
+
+    def transcribe(audio):
+        result = model.transcribe(
+            audio,
+            language=lang,
+            fp16=(device == "cuda"),
+            no_speech_threshold=0.3,
+            logprob_threshold=-1.5,
+            compression_ratio_threshold=2.8,
+            condition_on_previous_text=True,
+            temperature=TEMPERATURES,
+        )
+        return result["text"].strip()
+
+    return transcribe, f"openai-whisper {cfg['model']} on {device}"
+
+
+def transcription_worker(cfg, conn):
+    """Child-process main loop. Messages from the daemon:
+         ("ping",)                      keep-alive (sent when recording starts)
+         ("transcribe", job_id, audio)  float32 mono @ sample_rate
+       Replies: ("ready", desc) once, then ("result"|"error", job_id, payload).
+    """
+    t0 = time.monotonic()
+    logging.getLogger("faster_whisper").setLevel(logging.WARNING)  # per-clip spam
+    try:
+        transcribe, desc = _load_engine(cfg)
+    except Exception as e:
+        log.error("could not load Whisper model: %s", e)
+        conn.send(("fatal", None, str(e)))
+        return
+    log.info("model ready in %.1fs: %s", time.monotonic() - t0, desc)
+    conn.send(("ready", None, desc))
+
+    keep_warm = float(cfg.get("keep_warm_s", 300))
+    # Before the first job the user may still be talking, so wait generously.
+    timeout = max(keep_warm, 300.0)
+    while True:
+        try:
+            if not conn.poll(timeout):
+                log.info("worker idle for %.0fs; exiting to free memory", timeout)
+                return
+            msg = conn.recv()
+        except (EOFError, OSError):
+            return  # daemon went away
+        if msg[0] != "transcribe":
+            continue  # ping: just resets the idle timer
+        _, job_id, audio = msg
+        try:
+            t = time.monotonic()
+            text = transcribe(audio)
+            log.info("transcribed %.1fs of audio in %.2fs",
+                     len(audio) / cfg["sample_rate"], time.monotonic() - t)
+            conn.send(("result", job_id, text))
+        except Exception as e:
+            log.error("transcription failed in worker: %s", e)
+            try:
+                conn.send(("error", job_id, str(e)))
+            except OSError:
+                return
+        timeout = keep_warm
+        if timeout <= 0:
+            return
+
+
+class Transcriber:
+    """Daemon-side handle on the (lazily started) transcription worker."""
+
+    def __init__(self, cfg):
+        import multiprocessing as mp
+        # "spawn", not fork: the daemon has Qt/PortAudio threads running, and
+        # forking a threaded process can deadlock the child.
+        self._ctx = mp.get_context("spawn")
+        self.cfg = cfg
+        self._lock = threading.Lock()
+        self._proc = None
+        self._conn = None
+        self._ready = False
+        self._job = 0
+
+    def _alive(self):
+        return self._proc is not None and self._proc.is_alive()
+
+    def _spawn(self):
+        parent, child = self._ctx.Pipe()
+        proc = self._ctx.Process(
+            target=transcription_worker, args=(self.cfg, child),
+            name="typefree-worker", daemon=True,
+        )
+        proc.start()
+        child.close()
+        self._proc, self._conn, self._ready = proc, parent, False
+
+    def _kill(self):
+        if self._proc is not None:
+            if self._proc.is_alive():
+                self._proc.kill()
+            self._proc.join(timeout=2)
+        if self._conn is not None:
+            self._conn.close()
+        self._proc = self._conn = None
+        self._ready = False
+
+    def prewarm(self):
+        """Start loading the model now (non-blocking), or keep a warm one alive."""
+        with self._lock:
+            try:
+                if self._alive():
+                    self._conn.send(("ping",))
+                    return
+                self._kill()  # reap an idle-exited worker
+                self._spawn()
+            except Exception as e:
+                log.warning("could not start transcription worker: %s", e)
+                self._kill()
+
+    @property
+    def ready(self):
+        """True if the model is loaded (never blocks). Call only while no job
+        is in flight — it consumes the worker's pending "ready" message."""
+        with self._lock:
+            if not self._alive():
+                return False
+            try:
+                while not self._ready and self._conn.poll(0):
+                    kind = self._conn.recv()[0]
+                    if kind == "ready":
+                        self._ready = True
+                    elif kind == "fatal":
+                        self._kill()  # transcribe() respawns and reports it
+                        return False
+            except (EOFError, OSError):
+                self._kill()
+                return False
+            return self._ready
+
+    def transcribe(self, audio):
+        """Blocking. Returns the text; raises RuntimeError on failure."""
+        for attempt in (1, 2):
+            with self._lock:
+                if not self._alive():
+                    self._kill()
+                    self._spawn()
+                self._job += 1
+                job, conn = self._job, self._conn
+            try:
+                conn.send(("transcribe", job, audio))
+                return self._wait(conn, job, len(audio) / self.cfg["sample_rate"])
+            except (EOFError, OSError, BrokenPipeError) as e:
+                # the worker idled out just as we sent the job; retry once
+                log.info("worker went away (%s); restarting", e or type(e).__name__)
+                with self._lock:
+                    self._kill()
+                if attempt == 2:
+                    raise RuntimeError("transcription worker crashed") from e
+
+    def _wait(self, conn, job, duration_s):
+        # Loading can include a one-time model download, so be patient until
+        # the worker says "ready"; after that, a stuck job is a real hang.
+        deadline = time.monotonic() + (60 + 2 * duration_s if self._ready else 900)
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0 or not conn.poll(left):
+                with self._lock:
+                    self._kill()
+                raise RuntimeError("transcription timed out")
+            kind, job_id, payload = conn.recv()
+            if kind == "ready":
+                self._ready = True
+                deadline = time.monotonic() + 60 + 2 * duration_s
+            elif kind == "fatal":
+                with self._lock:
+                    self._kill()
+                raise RuntimeError(payload)
+            elif job_id == job:
+                if kind == "error":
+                    raise RuntimeError(payload)
+                return payload
 
 def find_keyboards():
     """Return evdev devices that look like keyboards (have letter keys)."""
@@ -187,7 +421,7 @@ class Recorder:
         self._stream.start()
 
     def stop(self):
-        """Stop and return the recorded audio as an int16 numpy array."""
+        """Stop and return the recorded audio as a float32 array in [-1, 1]."""
         if not self._active:
             return None
         self._active = False
@@ -207,9 +441,8 @@ class Recorder:
         if not self._frames:
             return None
         audio = np.concatenate(self._frames, axis=0).flatten()
-        # float32 [-1,1] -> int16 wav
-        audio = np.clip(audio, -1.0, 1.0)
-        return (audio * 32767).astype(np.int16)
+        # handed straight to Whisper: no WAV file, no ffmpeg decode
+        return np.clip(audio, -1.0, 1.0).astype(np.float32, copy=False)
 
 
 class Typefree:
@@ -224,7 +457,7 @@ class Typefree:
         self.paused = False
         self.tray = None
         self.recorder = Recorder(cfg["sample_rate"])
-        self.model = None
+        self.transcriber = Transcriber(cfg)
         self._have_ydotool = shutil.which("ydotool") is not None
         self._have_wlcopy = shutil.which("wl-copy") is not None
         self._have_xclip = shutil.which("xclip") is not None
@@ -285,8 +518,15 @@ class Typefree:
             "YDOTOOL_SOCKET",
             os.path.join(env.get("XDG_RUNTIME_DIR", "/tmp"), ".ydotool_socket"),
         )
+        # -d/-H: ydotool's 20 ms defaults cost 40 ms per character. Text goes
+        # in via stdin (-f -), which also turns off backslash-escape parsing.
+        delay = str(max(0, int(self.cfg.get("type_delay_ms", 1))))
+        timeout_s = 30 + len(text) * (2 * int(delay) + 5) / 1000
         try:
-            subprocess.run(["ydotool", "type", "--", text], env=env, timeout=30)
+            subprocess.run(
+                ["ydotool", "type", "-d", delay, "-H", delay, "-f", "-"],
+                input=text.encode(), env=env, timeout=timeout_s,
+            )
         except Exception as e:
             log.warning("ydotool type failed: %s", e)
 
@@ -318,6 +558,8 @@ class Typefree:
             self._notify("🎤 Mic error", str(e), urgency="critical")
             self._play("empty")
             return
+        # load the model while the user is still speaking
+        self.transcriber.prewarm()
         self._set_state("recording")
         self._notify("🎙️ Listening…", "Speak now — release to type")
         self._play("start")
@@ -333,31 +575,19 @@ class Typefree:
 
         def work():
             try:
-                import gc
                 audio = self.recorder.stop()
                 if audio is None or len(audio) < self.cfg["sample_rate"] // 4:
                     log.info("(too short / nothing recorded)")
                     self._notify("🤚 Too short", "Hold the key while you speak")
                     self._play("empty")
                     return
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                    wavfile.write(f.name, self.cfg["sample_rate"], audio)
-                    path = f.name
-                duration_s = len(audio) / self.cfg["sample_rate"]
-                log.info("recorded %.1f s of audio", duration_s)
-                lang = None if self.cfg["language"] == "auto" else self.cfg["language"]
-                
-                self._notify("⏳ Loading model & Transcribing…", "")
-                
-                import multiprocessing as mp
-                q = mp.Queue()
-                p = mp.Process(target=run_transcription, args=(self.cfg, path, q))
-                p.start()
-                p.join()
-                
-                os.unlink(path)
-                
-                text = q.get() if not q.empty() else ""
+                log.info("recorded %.1f s of audio",
+                         len(audio) / self.cfg["sample_rate"])
+                if not self.transcriber.ready:
+                    self._notify("⏳ Loading model…", "")
+                t = time.monotonic()
+                text = self.transcriber.transcribe(audio)
+                log.info("transcription took %.2fs", time.monotonic() - t)
                 if not text:
                     log.info("(no speech detected)")
                     self._notify("🔇 No speech detected", "")
@@ -365,7 +595,9 @@ class Typefree:
                     return
                 log.info("📝 %s", text)
                 self._clip_text(text)
+                t = time.monotonic()
                 self._type_text(text)
+                log.info("typed %d chars in %.2fs", len(text), time.monotonic() - t)
                 preview = text if len(text) <= 80 else text[:77] + "…"
                 self._notify("📝 Typed", preview)
             except Exception as e:

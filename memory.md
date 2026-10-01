@@ -281,3 +281,21 @@ immediately, e.g. the verification we used:
 - **The Problem**: Previously, `typefree` loaded PyTorch/Whisper on startup, permanently hoarding ~1-2GB of RAM. Even when we attempted dynamic loading and `gc.collect()`, PyTorch's C++ allocator and `glibc` refused to return the memory to the OS, leaving a 20% RAM footprint stranded.
 - **The Fix**: The transcription logic (`whisper.load_model` and `model.transcribe`) was moved into an entirely separate subprocess using `multiprocessing.Process`.
 - **The Result**: The background daemon now stays at an ultra-low **~0.6% RAM**. When the hotkey is released, the subprocess spawns, loads the model, transcribes, and then is forcefully killed by the OS. This physically guarantees 100% of the heavy AI memory is released instantly after every transcription. The trade-off is a 1-2s delay before typing as the model dynamically loads.
+
+## 10. October 2026 Latency Overhaul (release → text in < 1 s)
+- **Measured bottlenecks (before)**: (1) the per-dictation child process imported
+  torch + loaded Whisper `small` only *after* key release (~2.5 s); (2) inference ran
+  on CPU with openai-whisper (~3 s for 25 s of audio) although the laptop has an
+  RTX 3050; (3) **`ydotool type` defaults to 20 ms delay + 20 ms hold = 40 ms per
+  character** — a 420-char dictation took 16.8 s just to type. (3) was the biggest.
+- **Fixes**: persistent `Transcriber` worker (spawn context, Pipe protocol) that is
+  started on key **press** so the model loads while the user speaks; stays warm for
+  `keep_warm_s` (default 300) then exits to free RAM (keeps the §9 RAM win).
+  Engine = faster-whisper (CUDA float16 beam 5 → CPU int8 greedy fallback →
+  openai-whisper fallback). `vad_filter=True` removes the "you"/"Thank you."
+  hallucinations on silent clips. Audio goes over the pipe as float32 (no WAV/ffmpeg).
+  Typing uses `ydotool type -d 1 -H 1 -f -` (stdin: no argv limit, no escape parsing).
+- **Measured after**: warm release→text 0.15 s (short) / 0.56 s (25 s audio) /
+  2.5 s (100 s audio); cold-but-prewarmed 0.64 s; typing 492 chars in 1.07 s,
+  verified byte-exact by grabbing *only* the ydotoold virtual device and decoding it.
+- **New config keys**: `device` (auto|cuda|cpu), `keep_warm_s`, `type_delay_ms`.

@@ -9,5 +9,8 @@
   "notify": true,
   "sound": true,
   "tray": true,
-  "sample_rate": 16000
+  "sample_rate": 16000,
+  "device": "auto",
+  "keep_warm_s": 300,
+  "type_delay_ms": 1
 }
