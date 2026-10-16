@@ -71,6 +71,11 @@ SOUNDS = {
 }
 SOUND_DIR = "/usr/share/sounds/freedesktop/stereo"
 
+# Seconds after recording starts to check that the mic is delivering audio.
+MIC_CHECK_S = 1.0
+# Give up on opening the mic after this long (a healthy open takes ~20 ms).
+MIC_OPEN_TIMEOUT_S = 2.0
+
 # map friendly names -> evdev key codes
 KEYCODE = {
     "a": ecodes.KEY_A, "b": ecodes.KEY_B, "c": ecodes.KEY_C, "d": ecodes.KEY_D,
@@ -403,22 +408,55 @@ class Recorder:
         self._stream = None
         self._frames = []
         self._active = False
+        self.blocks = 0  # audio callbacks so far; stays 0 when the mic is dead
 
     def start(self):
         if self._active:
             return
         self._frames = []
+        self.blocks = 0
         self._active = True
 
         def cb(indata, frames, time_info, status):
             if status:
                 log.debug("audio status: %s", status)
+            self.blocks += 1
             self._q.put(indata.copy())
 
-        self._stream = sd.InputStream(
-            samplerate=self.sample_rate, channels=1, dtype="float32", callback=cb
-        )
-        self._stream.start()
+        # A failed sound card can make PortAudio's open block for a long time.
+        # Open in a helper thread so the hotkey thread never freezes; if the
+        # open finishes after we gave up, the helper closes the stream itself.
+        box = {}
+        lock = threading.Lock()
+
+        def open_stream():
+            try:
+                s = sd.InputStream(samplerate=self.sample_rate, channels=1,
+                                   dtype="float32", callback=cb)
+                s.start()
+            except Exception as e:
+                box["err"] = e
+                return
+            with lock:
+                if not box.get("abandoned"):
+                    box["stream"] = s
+                    return
+            s.abort()
+            s.close()
+
+        opener = threading.Thread(target=open_stream, daemon=True)
+        opener.start()
+        opener.join(MIC_OPEN_TIMEOUT_S)
+        with lock:
+            stream = box.get("stream")
+            if stream is None:
+                box["abandoned"] = True
+        if stream is None:
+            self._active = False
+            raise box.get("err") or RuntimeError(
+                "microphone did not open within %.0f s (sound card not "
+                "responding)" % MIC_OPEN_TIMEOUT_S)
+        self._stream = stream
 
     def stop(self):
         """Stop and return the recorded audio as a float32 array in [-1, 1]."""
@@ -426,7 +464,13 @@ class Recorder:
             return None
         self._active = False
         try:
-            self._stream.stop()
+            # stop() waits for in-flight buffers; if the capture device never
+            # delivered any (e.g. the sound card failed to resume), it blocks
+            # for ~20 s. abort() returns at once and there is nothing to lose.
+            if self.blocks:
+                self._stream.stop()
+            else:
+                self._stream.abort()
             self._stream.close()
         except Exception:
             pass
@@ -455,6 +499,7 @@ class Typefree:
         self.recording = False
         self.busy = False
         self.paused = False
+        self._rec_t0 = 0.0
         self.tray = None
         self.recorder = Recorder(cfg["sample_rate"])
         self.transcriber = Transcriber(cfg)
@@ -549,6 +594,7 @@ class Typefree:
         if self.recording or self.busy:
             return
         self.recording = True
+        self._rec_t0 = time.monotonic()
         log.info("🎙️  recording...")
         try:
             self.recorder.start()
@@ -563,12 +609,28 @@ class Typefree:
         self._set_state("recording")
         self._notify("🎙️ Listening…", "Speak now — release to type")
         self._play("start")
+        # A working mic delivers a block every few ms. If nothing has arrived
+        # after a second, warn now instead of letting the user talk to nothing.
+        timer = threading.Timer(MIC_CHECK_S, self._check_mic, (self._rec_t0,))
+        timer.daemon = True
+        timer.start()
+
+    def _check_mic(self, rec_t0):
+        # rec_t0 ties the check to its own recording, not a later re-press
+        if self.recording and self._rec_t0 == rec_t0 and self.recorder.blocks == 0:
+            log.error("microphone is delivering no audio (sound card or "
+                      "PipeWire problem — check `journalctl -k | grep -i sof`)")
+            self._notify("🎤 Microphone not giving audio",
+                         "Check your sound settings, or reboot if the sound "
+                         "card failed", urgency="critical")
+            self._play("empty")
 
     def _stop_and_transcribe(self):
         if not self.recording:
             return
         self.recording = False
         self.busy = True
+        held_s = time.monotonic() - self._rec_t0
         log.info("⏹️  transcribing...")
         self._set_state("busy")
         self._notify("⏳ Transcribing…", "")
@@ -576,6 +638,15 @@ class Typefree:
         def work():
             try:
                 audio = self.recorder.stop()
+                if audio is None and held_s >= MIC_CHECK_S:
+                    # held long enough for audio to flow, yet none came:
+                    # the mic is dead, not the user too quick
+                    log.info("(no audio from microphone)")
+                    self._notify("🎤 Microphone not giving audio",
+                                 "Check your sound settings, or reboot if "
+                                 "the sound card failed", urgency="critical")
+                    self._play("empty")
+                    return
                 if audio is None or len(audio) < self.cfg["sample_rate"] // 4:
                     log.info("(too short / nothing recorded)")
                     self._notify("🤚 Too short", "Hold the key while you speak")
